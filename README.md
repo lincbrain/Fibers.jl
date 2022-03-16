@@ -2,7 +2,7 @@
 
 ### Import this package
 
-Before starting julia, it is recommended to define the environment variable FREESURFER_HOME. This will be used, e.g., to load the FreeSurfer color look-up table automatically.
+Before starting julia and importing this package, it is recommended to define the environment variable FREESURFER_HOME. This will be used, e.g., to load the FreeSurfer color look-up table automatically.
 
 ```julia
 julia> import FreeSurfer as fs
