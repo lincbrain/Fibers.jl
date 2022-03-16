@@ -1,3 +1,5 @@
+<img src="https://user-images.githubusercontent.com/15318615/158502382-3d47c48b-e991-400b-8f7c-e745f32e9643.png" width=800>
+
 ### Import this package
 
 Before starting julia, it is recommended to define the environment variable FREESURFER_HOME. This will be used, e.g., to load the FreeSurfer color look-up table automatically.
@@ -29,6 +31,12 @@ julia> fs.show(fa)
 julia> fs.mri_write(aa, "/tmp/aparc+aseg.nii.gz")
 
 julia> fs.mri_write(fa, "/tmp/MGH35_HCP_FA_template.mgz")
+```
+
+### Read Bruker scan directories
+
+```julia
+julia> ph = fs.mri_read("/opt/nmrdata/PV-7.0.0/ayendiki/Phantom.cO1/5/");
 ```
 
 ### Read a .trk tractography streamline file
