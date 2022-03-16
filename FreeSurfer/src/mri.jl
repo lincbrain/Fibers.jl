@@ -795,6 +795,8 @@ function load_bruker(indir::String, headeronly::Bool=false)
   mri.fspec = imgfile
   mri.pwd = pwd()
 
+  nb0 = 0
+
   # Read information for the image header from the Bruker method file
   io = open(methfile, "r")
 
@@ -815,6 +817,9 @@ function load_bruker(indir::String, headeronly::Bool=false)
     elseif startswith(ln, "##\$PVM_RepetitionTime=")	# TR
       ln = split(ln, "=")[2]
       mri.tr = parse(Float32, ln)
+    elseif startswith(ln, "##\$PVM_DwAoImages=")	# Number of b=0 volumes
+      ln = split(ln, "=")[2]
+      nb0 = parse(Int64, ln)
     elseif startswith(ln, "##\$PVM_DwDir=")		# Diffusion gradients
       nval = split(ln, "(")[2]
       nval = split(nval, ")")[1]
@@ -854,6 +859,12 @@ function load_bruker(indir::String, headeronly::Bool=false)
   end
 
   close(io)
+
+  # Add b=0 volumes to the gradient table
+  # (The method file includes them in the list of b-values but not vectors)
+  for ib0 in 1:nb0
+    mri.bvec = vcat([0 0 0], mri.bvec)
+  end
 
   # Read information about image binary data from Bruker reco file
   io = open(recofile, "r")
