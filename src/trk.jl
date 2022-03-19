@@ -104,30 +104,7 @@ function Tract(ref::MRI)
   # but it has not changed the vox2ras matrix
 
   # Find orientation of image coordinate system
-  orient = Vector{Char}(undef, 3)
-
-  for idim in 1:3
-    (amax, imax) = findmax(abs.(ref.vox2ras[idim, 1:3]))
-    if imax == 1
-      if ref.vox2ras[idim, imax] > 0
-        orient[idim] = 'R'
-      else
-        orient[idim] = 'L'
-      end
-    elseif imax == 2
-      if ref.vox2ras[idim, imax] > 0
-        orient[idim] = 'A'
-      else
-        orient[idim] = 'P'
-      end
-    else
-      if ref.vox2ras[idim, imax] > 0
-        orient[idim] = 'S'
-      else
-        orient[idim] = 'I'
-      end
-    end
-  end
+  orient = vox2ras_to_orient(ref.vox2ras)
 
   # Find patient-to-scanner coordinate transform:
   # Take x and y vectors from vox2RAS matrix, convert to LPS,

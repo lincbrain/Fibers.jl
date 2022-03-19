@@ -486,6 +486,43 @@ end
 
 
 """
+    vox2ras_to_orient(vox2ras::Matrix)
+
+Convert a vox2ras matrix to a 3-character array indicating image orientation,
+e.g., RAS, LIA, etc.
+"""
+function vox2ras_to_orient(vox2ras::Matrix)
+
+  orient = Vector{Char}(undef, 3)
+
+  for idim in 1:3
+    (amax, imax) = findmax(abs.(vox2ras[1:3, idim]))
+    if imax == 1
+      if vox2ras[imax, idim] > 0
+        orient[idim] = 'R'
+      else
+        orient[idim] = 'L'
+      end
+    elseif imax == 2
+      if vox2ras[imax, idim] > 0
+        orient[idim] = 'A'
+      else
+        orient[idim] = 'P'
+      end
+    else
+      if vox2ras[imax, idim] > 0
+        orient[idim] = 'S'
+      else
+        orient[idim] = 'I'
+      end
+    end
+  end
+
+  return orient
+end
+
+
+"""
     mri_filename(fstring::String, checkdisk::Bool=true)
 
 Return a valid file name, file stem, and file extension, given a string
