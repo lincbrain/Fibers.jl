@@ -561,7 +561,7 @@ FreeSurfer MRI struct defined in mri.h.
   3. A file stem, in which case the format and full file name are determined
      by finding a file on disk named `infile`.{mgh, mgz, nii, nii.gz}
   4. A Bruker scan directory, which is expected to contain the following files:
-     method, pdata/1/reco, pdata/1/2dseq
+     method, acqp, pdata/1/reco, pdata/1/2dseq
 
 - `headeronly::Bool=false`: If true, the pixel data are not read in.
 
@@ -773,7 +773,7 @@ Read Bruker image data from disk and return an `MRI` structure similar to the
 FreeSurfer MRI struct defined in mri.h.
 
 # Arguments
-- `indir::String`: Path to a Bruker scan directory (files called method,
+- `indir::String`: Path to a Bruker scan directory (files called method, acqp,
 pdata/1/reco, and pdata/1/2dseq are expected to be found in it)
 
 - `headeronly::Bool=false`: If true, the pixel data are not read in.
@@ -782,12 +782,13 @@ function load_bruker(indir::String, headeronly::Bool=false)
 
   dname = abspath(indir)
   methfile = dname * "/method" 
+  acqpfile = dname * "/acqp" 
   recofile = dname * "/pdata/1/reco"
   imgfile  = dname * "/pdata/1/2dseq"
 
-  if any(.!isfile.([methfile, recofile, imgfile]))
+  if any(.!isfile.([methfile, acqpfile, recofile, imgfile]))
     error("Input directory must contain the files: " *
-          "method, pdata/1/reco, pdata/1/2dseq")
+          "method, acqp, pdata/1/reco, pdata/1/2dseq")
   end
 
   mri = MRI()
@@ -865,6 +866,24 @@ function load_bruker(indir::String, headeronly::Bool=false)
   for ib0 in 1:nb0
     mri.bvec = vcat([0 0 0], mri.bvec)
   end
+
+  # Read receiver gain from Bruker acqp file
+  io = open(acqpfile, "r")
+
+  gain = Float32(1)
+
+  while !eof(io)
+    ln = readline(io)
+
+    if startswith(ln, "##\$RG=")			# Receiver gain
+      ln = split(ln, "=")[2]
+      gain = parse(Float32, ln)
+    end
+  end
+
+  gain /= 64
+
+  close(io)
 
   # Read information about image binary data from Bruker reco file
   io = open(recofile, "r")
@@ -956,6 +975,9 @@ function load_bruker(indir::String, headeronly::Bool=false)
     end
   end
 
+  # Normalize by receiver gain
+  mri.vol = mri.vol / gain
+  
   return mri
 end
 
