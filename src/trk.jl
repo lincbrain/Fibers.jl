@@ -100,7 +100,7 @@ function Tract(ref::MRI)
   tr = Tract()
 
   # In the following I must take into account that mri_read()
-  # has reversed the first 2 dimensions of volsize and volres,
+  # may have permuted the first 2 dimensions of volsize and volres,
   # but it has not changed the vox2ras matrix
 
   # Find orientation of image coordinate system
@@ -132,13 +132,23 @@ function Tract(ref::MRI)
   # Find patient-to-scanner coordinate transform:
   # Take x and y vectors from vox2RAS matrix, convert to LPS,
   # divide by voxel size
-  p2s = [-1 0 0; 0 -1 0; 0 0 1] * ref.vox2ras[1:3, 1:2] * 
-                                  Diagonal([1, 1]./ref.volres[2,1])
+  if ref.ispermuted
+    p2s = [-1 0 0; 0 -1 0; 0 0 1] * ref.vox2ras[1:3, 1:2] * 
+                                    Diagonal([1, 1]./ref.volres[[2,1]])
+  else
+    p2s = [-1 0 0; 0 -1 0; 0 0 1] * ref.vox2ras[1:3, 1:2] * 
+                                    Diagonal([1, 1]./ref.volres[1:2])
+  end
 
   tr.id_string     = UInt8.(collect("TRACK\0"))
 
-  tr.dim           = Int16.(ref.volsize[[2,1,3]])
-  tr.voxel_size    = Float32.(ref.volres[[2,1,3]])
+  if ref.ispermuted
+    tr.dim         = Int16.(ref.volsize[[2,1,3]])
+    tr.voxel_size  = Float32.(ref.volres[[2,1,3]])
+  else
+    tr.dim         = Int16.(ref.volsize)
+    tr.voxel_size  = Float32.(ref.volres)
+  end
   tr.origin        = Float32.(zeros(3))
 
   tr.n_scalars     = Int16(0)
