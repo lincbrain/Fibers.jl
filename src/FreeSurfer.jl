@@ -16,7 +16,8 @@ module FreeSurfer
 
 include("mri.jl")
 include("trk.jl")
-include("view.jl")
+include("show.jl")
+#include("view.jl")
 include("dti.jl")
 
 function __init__()
