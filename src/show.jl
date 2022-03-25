@@ -121,17 +121,39 @@ end
 
 
 """
-    info(mri::MRI, mrimod::Union{MRI, Nothing}=nothing)
+    info(mri::MRI)
 
-Show an `MRI` structure (an image slice and a summary of header info) in the
-terminal window
+Show basic info from the header of an `MRI` structure
+
+"""
+function info(mri::MRI)
+
+  if !isempty(mri.fspec)
+    println("Read from: " * mri.fspec)
+  end
+  println("Volume dimensions: " * string(collect(size(mri.vol))))
+  println("Spatial resolution: " * string(Float64.(mri.volres)))
+  if !isempty(mri.bval)
+    println("b-values: " * string(Float64.(unique(mri.bval))))
+  end
+  println("Intensity range: " * string(Float64.([minimum(mri.vol),
+                                                 maximum(mri.vol)])))
+
+end
+
+
+"""
+    disp(mri::MRI, mrimod::Union{MRI, Nothing}=nothing)
+
+Quick display of an `MRI` structure (an image slice and a summary of header
+info) in the terminal window
 
 # Arguments:
 - `mri::MRI`: the main image to display
 - `mrimod:MRI`: an optional image to modulate the main image by (e.g., an FA
   map to modulate a vector map)
 """
-function info(mri::MRI, mrimod::Union{MRI, Nothing}=nothing)
+function disp(mri::MRI, mrimod::Union{MRI, Nothing}=nothing)
 
   # Find non-empty slices in z dimension
   iz = any(mri.vol .!= 0; dims=([1:2; 4:ndims(mri.vol)]))
@@ -214,16 +236,7 @@ function info(mri::MRI, mrimod::Union{MRI, Nothing}=nothing)
 
   # Print image info
   println()
-  if !isempty(mri.fspec)
-    println("Read from: " * mri.fspec)
-  end
-  println("Volume dimensions: " * string(collect(size(mri.vol))))
-  println("Spatial resolution: " * string(Float64.(mri.volres)))
-  if !isempty(mri.bval)
-    println("b-values: " * string(Float64.(unique(mri.bval))))
-  end
-  println("Intensity range: " * string(Float64.([minimum(mri.vol),
-                                                 maximum(mri.vol)])))
+  info(mri)
 end
 
 
