@@ -68,9 +68,7 @@ end
 
 
 "The FreeSurfer color look-up table"
-const global color_lut = haskey(ENV, "FREESURFER_HOME") ?
-                         LUT(ENV["FREESURFER_HOME"]*"/FreeSurferColorLUT.txt") :
-                         LUT()
+const global color_lut = LUT(pkgdir(FreeSurfer) * "/src/FreeSurferColorLUT.txt")
 
 
 """
