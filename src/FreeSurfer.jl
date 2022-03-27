@@ -18,7 +18,10 @@ include("mri.jl")
 include("trk.jl")
 include("show.jl")
 #include("view.jl")
+include("util.jl")
 include("dti.jl")
+include("odf.jl")
+include("gqi.jl")
 
 function __init__()
 
