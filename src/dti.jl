@@ -46,6 +46,9 @@ end
     dti_fit_ls(dwi::MRI, mask:MRI)
 
 Perform least-squares fitting of tensors from DWIs and return a `DTI` structure.
+
+If you use this method, please cite:
+Peter Basser et al. (1994). Estimation of the effective self-diffusion tensor from the NMR spin echo. Journal of Magnetic Resonance Series B, 103(3), 247–254. https://doi.org/10.1006/jmrb.1994.1037
 """
 function dti_fit_ls(dwi::MRI, mask::MRI)
 
