@@ -195,8 +195,8 @@ mutable struct MRI
   volres::Vector{Float32}
   tkrvox2ras::Matrix{Float32}
 
-  bval::Vector{Number}
-  bvec::Matrix{Number}
+  bval::Vector{Float32}
+  bvec::Matrix{Float32}
 end
 
 
@@ -252,8 +252,8 @@ MRI() = MRI(
   Vector{Float32}(undef, 0),
   Matrix{Float32}(undef, 0, 0),
 
-  Vector{Number}(undef, 0),
-  Matrix{Number}(undef, 0, 0)
+  Vector{Float32}(undef, 0),
+  Matrix{Float32}(undef, 0, 0)
 )
 
 
@@ -721,6 +721,10 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
       if length(b) == mri.nframes
         mri.bval = b
         mri.bvec = g
+
+        # Normalize gradient vectors
+        mri.bvec = mri.bvec ./ sqrt.(sum(mri.bvec.^2, dims=2))
+        mri.bvec[isnan.(mri.bvec)] .= Float32(0)
       end
     end
   end
@@ -876,6 +880,10 @@ function load_bruker(indir::String, headeronly::Bool=false)
       end
 
       mri.bvec = permutedims(reshape(bvec, 3, :), [2 1])
+
+      # Normalize gradient vectors
+      mri.bvec = mri.bvec ./ sqrt.(sum(mri.bvec.^2, dims=2))
+      mri.bvec[isnan.(mri.bvec)] .= Float32(0)
     elseif startswith(ln, "##\$PVM_DwEffBval=")		# b-values
       nval = split(ln, "(")[2]
       nval = split(nval, ")")[1]
@@ -2060,6 +2068,10 @@ function mri_read_bfiles!(dwi::MRI, infile1::String, infile2::String)
     dwi.bval = tab2
     dwi.bvec = tab1
   end
+
+  # Normalize gradient vectors
+  dwi.bvec = dwi.bvec ./ sqrt.(sum(dwi.bvec.^2, dims=2))
+  dwi.bvec[isnan.(dwi.bvec)] .= Float32(0)
 
   return tab1, tab2
 end

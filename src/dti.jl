@@ -62,7 +62,7 @@ function dti_fit_ls(dwi::MRI, mask::MRI)
   A = hcat(dwi.bvec[:,1].^2, 2*dwi.bvec[:,1].*dwi.bvec[:,2],
            2*dwi.bvec[:,1].*dwi.bvec[:,3], dwi.bvec[:,2].^2,
            2*dwi.bvec[:,2].*dwi.bvec[:,3], dwi.bvec[:,3].^2)
-  A = hcat(-dwi.bval .* A, ones(size(A, 1), 1))
+  A = hcat(-dwi.bval .* A, ones(Float32, size(A, 1), 1))
 
   pA = pinv(A)
 
