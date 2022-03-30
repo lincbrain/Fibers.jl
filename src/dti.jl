@@ -14,7 +14,7 @@
 
 using LinearAlgebra, Statistics
 
-export DTI, dti_fit, dti_write
+export DTI, adc_fit, dti_fit, dti_write
 
 
 "Container for outputs of a DTI fit"
@@ -33,11 +33,69 @@ end
 
 
 """
-    dti_fit_ls(dwi::MRI, mask:MRI)
+    adc_fit(dwi::MRI, mask:MRI)
+
+Fit the apparent diffusion coefficient (ADC) to DWIs and return it as an
+`MRI` structure.
+"""
+function adc_fit(dwi::MRI, mask::MRI)
+
+  if isempty(dwi.bval)
+    error("Missing b-value table from input DWI structure")
+  end
+
+  ib0 = (dwi.bval .== minimum(dwi.bval))
+
+  A = hcat(-dwi.bval, ones(Float32, length(dwi.bval)))
+
+  pA = pinv(A)
+
+  adc = MRI(mask, 1)
+  s0  = MRI(mask, 1)
+
+  Threads.@threads for iz in 1:size(dwi.vol, 3)
+    for iy in 1:size(dwi.vol, 2)
+      for ix in 1:size(dwi.vol, 1)
+        mask.vol[ix, iy, iz] == 0 && continue
+
+        # Only use positive DWI values to fit the model
+        ipos = dwi.vol[ix, iy, iz, :] .> 0
+        npos = sum(ipos)
+
+        if npos == length(dwi.bval)
+          y = pA * log.(dwi.vol[ix, iy, iz, :])
+        elseif npos > 6
+          sum(ipos .&& ib0) == 0 && continue
+          y = pinv(A[ipos, :]) * log.(dwi.vol[ix, iy, iz, ipos])
+        else
+          continue
+        end
+
+        adc.vol[ix, iy, iz] = y[1]
+        s0.vol[ix, iy, iz]  = exp(y[2])
+      end
+    end
+  end
+
+  return adc, s0
+end
+
+
+"""
+    dti_fit(dwi::MRI, mask:MRI)
 
 Fit tensors to DWIs and return a `DTI` structure.
 """
 function dti_fit(dwi::MRI, mask::MRI)
+
+  if isempty(dwi.bval)
+    error("Missing b-value table from input DWI structure")
+  end
+
+  if isempty(dwi.bvec)
+    error("Missing gradient table from input DWI structure")
+  end
+
   dti_fit_ls(dwi::MRI, mask::MRI)
 end
 
@@ -51,14 +109,6 @@ If you use this method, please cite:
 Peter Basser et al. (1994). Estimation of the effective self-diffusion tensor from the NMR spin echo. Journal of Magnetic Resonance Series B, 103(3), 247–254. https://doi.org/10.1006/jmrb.1994.1037
 """
 function dti_fit_ls(dwi::MRI, mask::MRI)
-
-  if isempty(dwi.bval)
-    error("Missing b-value table from input DWI structure")
-  end
-
-  if isempty(dwi.bvec)
-    error("Missing gradient table from input DWI structure")
-  end
 
   ib0 = (dwi.bval .== minimum(dwi.bval))
 
@@ -114,6 +164,7 @@ function dti_fit_ls(dwi::MRI, mask::MRI)
   return DTI(S0, Eval1, Eval2, Eval3, Evec1, Evec2, Evec3,
              dti_maps(Eval1, Eval2, Eval3)...)
 end
+
 
 """
     dti_maps(eigval1::MRI, eigval2::MRI, eigval3::MRI)
