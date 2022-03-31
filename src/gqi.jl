@@ -18,6 +18,7 @@ export GQI, gqi_rec, gqi_write
 
 "Container for outputs of a GQI fit"
 struct GQI
+  odf::MRI
   peak1::MRI
   peak2::MRI
   peak3::MRI
@@ -46,6 +47,7 @@ Fang-Cheng Yeh, et al. (2010). Generalized q-sampling imaging. IEEE Transactions
 
 # Output
 In the `GQI` structure:
+- `.odf`: ODF amplitudes on the half sphere
 - `.peak1`, `.peak2`, `.peak3`: Orientation vectors of the 3 peak ODF amplitudes
 - `.qa1`, `.qa2`, `.qa3`: Quantitative anisotropy for the 3 peak orientations
 
@@ -66,12 +68,13 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
   bq_vector = dwi.bvec .* (sqrt.(dwi.bval * Float32(0.01506)) * (σ / π))
   A = sinc.(odf_dirs.vertices[div(nvert,2)+1:end, :] * bq_vector')
 
-  peak1 = MRI(mask,3)
-  peak2 = MRI(mask,3)
-  peak3 = MRI(mask,3)
-  qa1 = MRI(mask,1)
-  qa2 = MRI(mask,1)
-  qa3 = MRI(mask,1)
+  odf   = MRI(mask, div(nvert,2))
+  peak1 = MRI(mask, 3)
+  peak2 = MRI(mask, 3)
+  peak3 = MRI(mask, 3)
+  qa1   = MRI(mask, 1)
+  qa2   = MRI(mask, 1)
+  qa3   = MRI(mask, 1)
 
   odfmax = 0
 
@@ -85,26 +88,26 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
 
         maximum(s) == 0 && continue
 
-        odf = A * s
+        odf.vol[ix, iy, iz, :] = A * s
 
-        p = find_peak(odf, odf_dirs.faces)
-        odfmax = max.(odfmax, mean(odf))
-        odfmin = minimum(odf)
+        p = find_peak(odf.vol[ix, iy, iz, :], odf_dirs.faces)
+        odfmax = max.(odfmax, mean(odf.vol[ix, iy, iz, :]))
+        odfmin = minimum(odf.vol[ix, iy, iz, :])
 
         length(p) == 0 && continue
 
         peak1.vol[ix, iy, iz, :] = odf_dirs.vertices[p[1], :]
-        qa1.vol[ix, iy, iz]      = odf[p[1]] - odfmin
+        qa1.vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[1]] - odfmin
 
         length(p) == 1 && continue
 
         peak2.vol[ix, iy, iz, :] = odf_dirs.vertices[p[2], :]
-        qa2.vol[ix, iy, iz]      = odf[p[2]] - odfmin
+        qa2.vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[2]] - odfmin
 
         length(p) == 2 && continue
 
         peak3.vol[ix, iy, iz, :] = odf_dirs.vertices[p[3], :]
-        qa3.vol[ix, iy, iz]      = odf[p[3]] - odfmin
+        qa3.vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[3]] - odfmin
       end
     end
   end
@@ -113,7 +116,7 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
   qa2.vol /= odfmax
   qa3.vol /= odfmax
 
-  return GQI(peak1, peak2, peak3, qa1, qa2, qa3)
+  return GQI(odf, peak1, peak2, peak3, qa1, qa2, qa3)
 end
 
 
