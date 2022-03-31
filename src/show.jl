@@ -280,13 +280,13 @@ end
 
 
 """
-    show(mri::MRI, plane::Char='a', islice::Union{Int64, Nothing}=nothing, idx_frame::Union{Int64, Nothing}=nothing)
+    show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing)
 
-Show the `idx_slice`-th slice from the `idx_frame`-th frame of an `MRI`
+Show the `z`-th slice from the `t`-th frame of an `MRI`
 structure, along the specified `plane` ('a': axial; 's': sagittal; 'c':
 coronal).
 """
-function show(mri::MRI, plane::Char='a', idx_slice::Union{Int64, Nothing}=nothing, idx_frame::Union{Int64, Nothing}=nothing)
+function show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing)
 
   # Find which axes of the volume correspond to the specified viewing plane
   ax = view_axes(mri.vox2ras, plane)
@@ -330,20 +330,20 @@ function show(mri::MRI, plane::Char='a', idx_slice::Union{Int64, Nothing}=nothin
   end
 
   # Extract slice of interest 
-  isnothing(idx_slice) && (idx_slice = div(nz, 2))
+  isnothing(z) && (z = div(nz, 2))
 
-  imslice = selectdim(mri.vol, ax3, idx_slice)
+  imslice = selectdim(mri.vol, ax3, z)
 
   # Extract volume of interest 
-  if isnothing(idx_frame)
-    idx_frame = 1
+  if isnothing(t)
+    t = 1
     if size(imslice, 3) == 3
       imslice = imslice[:, :, 1:3]
     else
       imslice = imslice[:, :, 1]
     end
   else
-    imslice = imslice[:, :, idx_frame]
+    imslice = imslice[:, :, t]
   end
 
   # Max intensity for display (only has effect on grayscale intensity maps)
@@ -361,8 +361,9 @@ function show(mri::MRI, plane::Char='a', idx_slice::Union{Int64, Nothing}=nothin
   rgb = rgb[flip1 ? (end:-1:1) : (1:end), flip2 ? (end:-1:1) : (1:end)]
 
   # Display volume
-  p = Plots.plot(rgb, showaxis=false, ticks=[], aspect_ratio=1,
-                      title=basename(mri.fspec))
+  isnothing(title) && (title = basename(mri.fspec))
+
+  p = Plots.plot(rgb, showaxis=false, ticks=[], aspect_ratio=1, title=title)
 
   # Add annotation for image axes
   Plots.annotate!(nx * .5, ny *.02, (label1[1], color1, 10), :top)
@@ -374,14 +375,14 @@ function show(mri::MRI, plane::Char='a', idx_slice::Union{Int64, Nothing}=nothin
   blabel = ""
 
   if !isempty(mri.bval)
-    blabel = "b=" * string(Int(round(mri.bval[idx_frame])))
+    blabel = "b=" * string(Int(round(mri.bval[t])))
   end
 
   if !isempty(mri.bvec)
     blabel = blabel * "\ng=[" *
-                      string(round(mri.bvec[idx_frame,1] * 100)/100) * "," *
-                      string(round(mri.bvec[idx_frame,2] * 100)/100) * "," *
-                      string(round(mri.bvec[idx_frame,3] * 100)/100) * "]"
+                      string(round(mri.bvec[t,1] * 100)/100) * "," *
+                      string(round(mri.bvec[t,2] * 100)/100) * "," *
+                      string(round(mri.bvec[t,3] * 100)/100) * "]"
   end
 
   if !isempty(blabel)
