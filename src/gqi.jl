@@ -60,9 +60,11 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
     error("Missing gradient table from input DWI structure")
   end
 
-  # GQI reconstruction matrix
+  nvert = size(odf_dirs.vertices, 1);
+
+  # GQI reconstruction matrix (half sphere)
   bq_vector = dwi.bvec .* (sqrt.(dwi.bval * Float32(0.01506)) * (σ / π))
-  A = sinc.(odf_dirs.vertices * bq_vector')
+  A = sinc.(odf_dirs.vertices[div(nvert,2)+1:end, :] * bq_vector')
 
   peak1 = MRI(mask,3)
   peak2 = MRI(mask,3)
