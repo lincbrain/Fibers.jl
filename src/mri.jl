@@ -2090,16 +2090,27 @@ function mri_read(inbase::String, type::DataType, headeronly::Bool=false, permut
     error("Type " * type * " is not a structure")
   end
 
-  # Find all fields in the structure that are of type MRI
-  varlist = fieldnames(type)
-  varlist = varlist[collect(fieldtype.(type, varlist) .== MRI)]
+  absbase = abspath(inbase)
+  flist = readdir(dirname(absbase), join=true)
 
-  isempty(varlist) && return
+  inputs = []
 
-  # Read image volumes into respective fields
-  infiles = inbase * "_" .* string.(varlist) .* ".nii.gz"
+  for var in fieldnames(type)
+    ftype = fieldtype.(type, var)
 
-  return type(mri_read.(infiles, headeronly, permuteflag)...)
+    if ftype == MRI
+      infile = absbase * "_" * string(var) * ".nii.gz"
+      push!(inputs, mri_read(infile, headeronly, permuteflag))
+    elseif ftype == Vector{MRI}
+      inpat = Regex("^" * absbase * "_" * string(var) * "[0-9]*.nii.gz\$")
+      infiles = flist[.!isnothing.(match.(inpat, flist))]
+      push!(inputs, mri_read.(infiles, headeronly, permuteflag))
+    else
+      push!(inputs, readdlm(infile))
+    end
+  end
+
+  return type(inputs...)
 end
 
 
