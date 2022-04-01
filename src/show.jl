@@ -347,7 +347,12 @@ function show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Un
   end
 
   # Max intensity for display (only has effect on grayscale intensity maps)
-  maxint = quantile(mri.vol[mri.vol .> 0], .999)
+  if mri.nframes < mri.depth
+    maxint = quantile(mri.vol[mri.vol .> 0], .999)
+  else				# For larger volumes, only use middle slice
+    nz_mid = div(nz, 2)
+    maxint = quantile(mri.vol[:,:,nz_mid,:][mri.vol[:,:,nz_mid,:] .> 0], .999)
+  end
 
   # Convert to RGB/Gray array
   rgb = vol_to_rgb(imslice, maxint)
