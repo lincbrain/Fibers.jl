@@ -2106,7 +2106,13 @@ function mri_read(inbase::String, type::DataType, headeronly::Bool=false, permut
       infiles = flist[.!isnothing.(match.(inpat, flist))]
       push!(inputs, mri_read.(infiles, headeronly, permuteflag))
     else
-      push!(inputs, readdlm(infile))
+      infile = absbase * "_" * string(var) * ".txt"
+      mat = Float32.(readdlm(infile))
+      if length(mat) == 1
+        push!(inputs, mat[1])
+      else
+        push!(inputs, mat)
+      end
     end
   end
 

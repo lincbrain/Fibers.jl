@@ -22,6 +22,7 @@ include("util.jl")
 include("dti.jl")
 include("odf.jl")
 include("gqi.jl")
+include("rusd.jl")
 
 function __init__()
 
