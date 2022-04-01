@@ -286,7 +286,7 @@ Show the `z`-th slice from the `t`-th frame of an `MRI`
 structure, along the specified `plane` ('a': axial; 's': sagittal; 'c':
 coronal).
 """
-function show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing)
+function show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing, vec::Bool=true)
 
   # Find which axes of the volume correspond to the specified viewing plane
   ax = view_axes(mri.vox2ras, plane)
@@ -347,11 +347,13 @@ function show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Un
   end
 
   # Max intensity for display (only has effect on grayscale intensity maps)
+  maxint = Float32(1)
+
   if mri.nframes < mri.depth
     maxint = quantile(mri.vol[mri.vol .> 0], .999)
   else				# For larger volumes, only use middle slice
-    nz_mid = div(nz, 2)
-    maxint = quantile(mri.vol[:,:,nz_mid,:][mri.vol[:,:,nz_mid,:] .> 0], .999)
+    imtmp = selectdim(mri.vol, ax3,  div(nz, 2))
+    maxint = quantile(imtmp[imtmp .> 0], .999)
   end
 
   # Convert to RGB/Gray array
