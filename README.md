@@ -2,11 +2,10 @@
 
 ### Import this package
 
-Before starting julia and importing this package, it is recommended to define the environment variable FREESURFER_HOME. This will be used, e.g., to load the FreeSurfer color look-up table automatically.
+Start julia, e.g.,  with ```julia --thread 10```, if you have 10 cores on your computer and you want julia to use them for multi-threading.
 
 ```julia
 julia> import FreeSurfer as fs
-FREESURFER_HOME: /usr/local/freesurfer/dev
 ```
 
 ### Read .mgh, .mgz, .nii, .nii.gz volumes
@@ -17,7 +16,7 @@ julia> aa = fs.mri_read("/usr/local/freesurfer/dev/subjects/fsaverage/mri/aparc+
 julia> fa = fs.mri_read("/usr/local/freesurfer/dev/trctrain/hcp/MGH35_HCP_FA_template.nii.gz");
 ```
 
-### Show volume and header summary info
+### Display volume and header summary info
 
 ```julia
 julia> fs.show(aa)
