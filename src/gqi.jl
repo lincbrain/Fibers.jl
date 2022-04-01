@@ -19,12 +19,8 @@ export GQI, gqi_rec, gqi_write
 "Container for outputs of a GQI fit"
 struct GQI
   odf::MRI
-  peak1::MRI
-  peak2::MRI
-  peak3::MRI
-  qa1::MRI
-  qa2::MRI
-  qa3::MRI
+  peak::Vector{MRI}
+  qa::Vector{MRI}
 end
 
 
@@ -48,8 +44,8 @@ Fang-Cheng Yeh, et al. (2010). Generalized q-sampling imaging. IEEE Transactions
 # Output
 In the `GQI` structure:
 - `.odf`: ODF amplitudes on the half sphere
-- `.peak1`, `.peak2`, `.peak3`: Orientation vectors of the 3 peak ODF amplitudes
-- `.qa1`, `.qa2`, `.qa3`: Quantitative anisotropy for the 3 peak orientations
+- `.peak`: Orientation vectors of the 3 peak ODF amplitudes
+- `.qa`: Quantitative anisotropy for each of the 3 peak orientations
 
 """
 function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Float32(1.25))
@@ -62,19 +58,22 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
     error("Missing gradient table from input DWI structure")
   end
 
+  npeak = 3;
+
   nvert = size(odf_dirs.vertices, 1);
 
   # GQI reconstruction matrix (half sphere)
   bq_vector = dwi.bvec .* (sqrt.(dwi.bval * Float32(0.01506)) * (σ / π))
   A = sinc.(odf_dirs.vertices[div(nvert,2)+1:end, :] * bq_vector')
 
-  odf   = MRI(mask, div(nvert,2))
-  peak1 = MRI(mask, 3)
-  peak2 = MRI(mask, 3)
-  peak3 = MRI(mask, 3)
-  qa1   = MRI(mask, 1)
-  qa2   = MRI(mask, 1)
-  qa3   = MRI(mask, 1)
+  odf  = MRI(mask, div(nvert,2))
+  peak = Vector{MRI}(undef, npeak)
+  qa   = Vector{MRI}(undef, npeak)
+
+  for ipeak in 1:npeak
+    peak[ipeak] = MRI(mask, 3)
+    qa[ipeak]   = MRI(mask, 1)
+  end
 
   odfmax = 0
 
@@ -94,29 +93,21 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
         odfmax = max.(odfmax, mean(odf.vol[ix, iy, iz, :]))
         odfmin = minimum(odf.vol[ix, iy, iz, :])
 
-        length(p) == 0 && continue
+        for ipeak in 1:npeak
+          length(p) < ipeak && continue
 
-        peak1.vol[ix, iy, iz, :] = odf_dirs.vertices[p[1], :]
-        qa1.vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[1]] - odfmin
-
-        length(p) == 1 && continue
-
-        peak2.vol[ix, iy, iz, :] = odf_dirs.vertices[p[2], :]
-        qa2.vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[2]] - odfmin
-
-        length(p) == 2 && continue
-
-        peak3.vol[ix, iy, iz, :] = odf_dirs.vertices[p[3], :]
-        qa3.vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[3]] - odfmin
+          peak[ipeak].vol[ix, iy, iz, :] = odf_dirs.vertices[p[ipeak], :]
+          qa[ipeak].vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[ipeak]] - odfmin
+        end
       end
     end
   end
 
-  qa1.vol /= odfmax
-  qa2.vol /= odfmax
-  qa3.vol /= odfmax
+  for ipeak in 1:npeak
+    qa[ipeak].vol /= odfmax
+  end
 
-  return GQI(odf, peak1, peak2, peak3, qa1, qa2, qa3)
+  return GQI(odf, peak, qa)
 end
 
 
@@ -153,7 +144,17 @@ to files whose names start with the specified base name.
 function gqi_write(gqi::GQI, basename::String)
 
   for var in fieldnames(GQI)
-    mri_write(getfield(gqi, var), basename * "_" * string(var) * ".nii.gz")
+    vartype = fieldtype(GQI, var)
+
+    if vartype == MRI
+      fname = basename * "_" * string(var) * ".nii.gz"
+      mri_write(getfield(gqi, var), fname)
+    elseif vartype == Vector{MRI}
+      for ivol = 1:length(getfield(gqi, var))
+        fname = basename * "_" * string(var) * string(ivol) * ".nii.gz"
+        mri_write(getfield(gqi, var)[ivol], fname)
+      end
+    end
   end
 end
 
