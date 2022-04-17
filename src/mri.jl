@@ -19,7 +19,7 @@
     MRIwrite.m
     load_mgh.m
     load_nifti.m
-    load_nifti_header.m
+    load_nifti_hdr.m
     save_nifti.m
     fsgettmppath.m
     vox2ras_0to1.m
@@ -33,17 +33,17 @@ export MRI, NIfTIheader, get_tmp_path, mri_filename, mri_read, mri_write,
        mri_read_bfiles, mri_read_bfiles!
 
 
-"Container for header and image data of a volume stored in NIfTI format"
-mutable struct NIfTIheader
+"Container for header of a volume stored in NIfTI format"
+struct NIfTIheader
   # NIfTI standard header fields
   sizeof_hdr::Int32
-  data_type::Vector{UInt8}
-  db_name::Vector{UInt8}
+  data_type::NTuple{10, UInt8}
+  db_name::NTuple{18, UInt8}
   extents::Int32
   session_error::Int16
   regular::UInt8
   dim_info::UInt8
-  dim::Vector{UInt16}
+  dim::NTuple{8,Int16}
   intent_p1::Float32
   intent_p2::Float32
   intent_p3::Float32
@@ -51,7 +51,7 @@ mutable struct NIfTIheader
   datatype::Int16
   bitpix::Int16
   slice_start::Int16
-  pixdim::Vector{Float32}
+  pixdim::NTuple{8,Float32}
   vox_offset::Float32
   scl_slope::Float32
   scl_inter::Float32
@@ -64,8 +64,8 @@ mutable struct NIfTIheader
   toffset::Float32
   glmax::Int32
   glmin::Int32
-  descrip::Vector{UInt8}
-  aux_file::Vector{UInt8}
+  descrip::NTuple{80,UInt8}
+  aux_file::NTuple{24,UInt8}
   qform_code::Int16
   sform_code::Int16
   quatern_b::Float32
@@ -74,77 +74,18 @@ mutable struct NIfTIheader
   quatern_x::Float32
   quatern_y::Float32
   quatern_z::Float32
-  srow_x::Vector{Float32}
-  srow_y::Vector{Float32}
-  srow_z::Vector{Float32}
-  intent_name::Vector{UInt8}
-  magic::Vector{UInt8}
+  srow_x::NTuple{4,Float32}
+  srow_y::NTuple{4,Float32}
+  srow_z::NTuple{4,Float32}
+  intent_name::NTuple{16,UInt8}
+  magic::NTuple{4,UInt8}
 
   # Additional fields
-  do_bswap::UInt8
+  do_bswap::Bool
   sform::Matrix{Float32}
   qform::Matrix{Float32}
   vox2ras::Matrix{Float32}
-  vol::Array
 end
-
-
-"""
-    NIfTIheader()
-
-Return an empty `NIfTIheader` structure
-"""
-NIfTIheader() = NIfTIheader(
-  Int32(0),
-  Vector{UInt8}(undef, 0),
-  Vector{UInt8}(undef, 0),
-  Int32(0),
-  Int16(0),
-  UInt8(0),
-  UInt8(0),
-  Vector{UInt16}(undef, 0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Int16(0),
-  Int16(0),
-  Int16(0),
-  Int16(0),
-  Vector{Float32}(undef, 0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Int16(0),
-  Int8(0),
-  Int8(0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Int32(0),
-  Int32(0),
-  Vector{UInt8}(undef, 0),
-  Vector{UInt8}(undef, 0),
-  Int16(0),
-  Int16(0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Float32(0),
-  Vector{Float32}(undef, 0),
-  Vector{Float32}(undef, 0),
-  Vector{Float32}(undef, 0),
-  Vector{UInt8}(undef, 0),
-  Vector{UInt8}(undef, 0),
-
-  UInt8(0),
-  Matrix{Float32}(undef, 0, 0),
-  Matrix{Float32}(undef, 0, 0),
-  Matrix{Float32}(undef, 0, 0),
-  []
-)
 
 
 "Container for header and image data of an MRI volume or volume series"
@@ -208,7 +149,55 @@ Return an empty `MRI` structure
 MRI() = MRI(
   [],
   false,
-  NIfTIheader(),
+  NIfTIheader(Int32(0),
+              Tuple(zeros(UInt8, 10)),
+              Tuple(zeros(UInt8, 18)),
+              Int32(0),
+              Int16(0),
+              UInt8(0),
+              UInt8(0),
+              Tuple(zeros(Int16, 8)),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Int16(0),
+              Int16(0),
+              Int16(0),
+              Int16(0),
+              Tuple(zeros(Float32, 8)),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Int16(0),
+              Int8(0),
+              Int8(0),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Int32(0),
+              Int32(0),
+              Tuple(zeros(UInt8, 80)),
+              Tuple(zeros(UInt8, 24)),
+              Int16(0),
+              Int16(0),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Float32(0),
+              Tuple(zeros(Float32, 4)),
+              Tuple(zeros(Float32, 4)),
+              Tuple(zeros(Float32, 4)),
+              Tuple(zeros(UInt8, 16)),
+              Tuple(zeros(UInt8, 4)),
+
+              UInt8(0),
+              Matrix{Float32}(undef, 0, 0),
+              Matrix{Float32}(undef, 0, 0),
+              Matrix{Float32}(undef, 0, 0)
+             ),
 
   "",
   "",
@@ -657,28 +646,26 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
       mri.volsize = volsz[1:3]
       mri.nframes = length(volsz) < 4 ? 1 : volsz[4]
     elseif any(fext .== ["nii", "nii.gz"])		#------- NIfTI -------#
-      hdr = load_nifti(fname, headeronly)
+      hdr, vol = load_nifti(fname, headeronly)
 
-      if !headeronly && isempty(hdr.vol)
+      if !headeronly && isempty(vol)
         error("Loading " * fname * " as NIfTI")
       end
 
       # Compatibility with MRIread.m:
       # When data have > 4 dims, put all data into dim 4.
-      volsz = hdr.dim[2:end]
-      volsz = volsz[volsz.>0]
-      volsz = Int.(volsz)
+      volsz = Int.(hdr.dim[2:end])
+      volsz = volsz[findall(volsz.>0)]
       if headeronly
         mri.vol = []
       else
-        mri.vol = hdr.vol
+        mri.vol = vol
 
         if length(volsz) > 4
           mri.vol = reshape(mri.vol, volsz[1], volsz[2], volsz[3], :)
         end
       end
 
-      hdr.vol = []		# Already have it above, so clear it 
       mri.niftihdr = hdr
 
       mri.tr = hdr.pixdim[5]	# Already in msec
@@ -687,7 +674,7 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
 
       mri.vox2ras0 = hdr.vox2ras
 
-      mri.volsize = volsz[1:3]
+      mri.volsize = collect(volsz[1:3])
       mri.nframes = length(volsz) < 4 ? 1 : volsz[4]
     else
       error("File extension " * fext * " not supported")
@@ -1208,7 +1195,7 @@ end
 
 
 """
-    hdr = load_nifti_hdr(fname::String)
+    load_nifti_hdr(fname::String) -> NIfTIheader
 
 Load the header of a .nii volume from disk.
 
@@ -1220,195 +1207,193 @@ then the qform (if valid).
 Assume that the input file is uncompressed (compression is handled in the
 wrapper load_nifti()).
 
-Handle data structures with more than 32k cols by setting the .glmin field to
-ncols when hdr.dim[2] < 0. This is FreeSurfer specific, for handling surfaces.
+Handle data with more than 32k cols by looking at the .dim field of the header.
+If dim[2] = -1, then the .glmin field contains the number of columns. This is
+FreeSurfer specific, for handling surfaces. When the total number of spatial
+voxels equals 163842, then reshape the volume to 163842x1x1xnframes. This is
+for handling the 7th order icosahedron used by FS group analysis.
 """
 function load_nifti_hdr(fname::String)
 
-  hdr = NIfTIheader()
+  nifti_header_size = 348
 
+  # Read header as vector of bytes
   io = open(fname, "r")
-
-  hdr.sizeof_hdr = read(io, Int32)
-  hdr.data_type = read!(io, Vector{UInt8}(undef, 10))
-  hdr.db_name = read!(io, Vector{UInt8}(undef, 18))
-  hdr.extents = read(io, Int32)
-  hdr.session_error = read(io, Int16)
-  hdr.regular = read(io, UInt8)
-  hdr.dim_info = read(io, UInt8)
-  hdr.dim = read!(io, Vector{Int16}(undef, 8))
-  hdr.intent_p1 = read(io, Float32)
-  hdr.intent_p2 = read(io, Float32)
-  hdr.intent_p3 = read(io, Float32)
-  hdr.intent_code = read(io, Int16)
-  hdr.datatype = read(io, Int16)
-  hdr.bitpix = read(io, Int16)
-  hdr.slice_start = read(io, Int16)
-  hdr.pixdim = read!(io, Vector{Float32}(undef, 8))
-  hdr.vox_offset = read(io, Float32)
-  hdr.scl_slope = read(io, Float32)
-  hdr.scl_inter = read(io, Float32)
-  hdr.slice_end = read(io, Int16)
-  hdr.slice_code = read(io, Int8)
-  hdr.xyzt_units = read(io, Int8)
-  hdr.cal_max = read(io, Float32)
-  hdr.cal_min = read(io, Float32)
-  hdr.slice_duration = read(io, Float32)
-  hdr.toffset = read(io, Float32)
-  hdr.glmax = read(io, Int32)
-  hdr.glmin = read(io, Int32)
-  hdr.descrip = read!(io, Vector{UInt8}(undef, 80))
-  hdr.aux_file = read!(io, Vector{UInt8}(undef, 24)) 
-  hdr.qform_code = read(io, Int16)
-  hdr.sform_code = read(io, Int16)
-  hdr.quatern_b = read(io, Float32)
-  hdr.quatern_c = read(io, Float32)
-  hdr.quatern_d = read(io, Float32)
-  hdr.quatern_x = read(io, Float32)
-  hdr.quatern_y = read(io, Float32)
-  hdr.quatern_z = read(io, Float32)
-  hdr.srow_x = read!(io, Vector{Float32}(undef, 4)) 
-  hdr.srow_y = read!(io, Vector{Float32}(undef, 4)) 
-  hdr.srow_z = read!(io, Vector{Float32}(undef, 4)) 
-  hdr.intent_name = read!(io, Vector{UInt8}(undef, 16)) 
-  hdr.magic = read!(io, Vector{UInt8}(undef, 4)) 
-
+  buffer = read!(io, Vector{UInt8}(undef, nifti_header_size))
   close(io)
 
-  # If numbers have the wrong endian-ness, reverse byte order
-  if hdr.sizeof_hdr == bswap(Int32(348))
-    for var in fieldnames(NIfTIheader)
-      setfield!(hdr, var, bswap.(getfield(hdr, var)))
-    end
+  typelist = NIfTIheader.types[1:end-4]
+  plist = pointer(buffer) .+ cumsum(sizeof.(typelist))
 
-    hdr.do_bswap = 1
+  # Check endian-ness of first entry to decide if byte order should be reversed 
+  headsize = unsafe_load(convert(Ptr{typelist[1]}, pointer(buffer)))
+
+  if headsize == nifti_header_size
+    do_bswap = false
+    f = identity
+  elseif headsize == bswap(Int32(nifti_header_size))
+    do_bswap = true
+    f = bswap
+  else
+    error("Invalid header size " * string(headsize) * " found in NIfTI header")
   end
 
+  # Convert vector of bytes to array of header fields
+  header = f.([(unsafe_load(convert(Ptr{typelist[i]}, plist[i-1])))
+               for i = 2:length(typelist)])
+
+  pushfirst!(header, f.(headsize))
+
+  # "dim" field:
   # This is to accomodate structures with more than 32k cols
-  # FreeSurfer specific. See also mriio.c.
-  if hdr.dim[2] < 0
-    hdr.dim[2] = hdr.glmin
-    hdr.glmin = 0
+  # FreeSurfer specific (see also mriio.c)
+  i_dim = findfirst(fieldnames(NIfTIheader) .== :dim)
+
+  if header[i_dim][2] < 0
+    i_glmin = findfirst(fieldnames(NIfTIheader) .== :glmin)
+    header[i_dim] = (header[i_dim][1], header[i_glmin], header[i_dim][3:end]...)
+    header[i_glmin] = 0
   end
 
-  # Look at xyz units and convert to mm if needed
-  xyzunits = hdr.xyzt_units & Int8(7)	# Bitwise AND with 00000111
+  nspatial = prod(Int32.(header[i_dim][2:4]))
+  if nspatial == 163842		# Ico7 surface
+    header[i_dim] = (header[i_dim][1], 163842, 1, 1, header[i_dim][5:end]...)
+  end
+
+  # "xyz_units" field:
+  # Find physical and time units of header fields
+  i_xyzt_units = findfirst(fieldnames(NIfTIheader) .== :xyzt_units)
+  
+  xyzunits = header[i_xyzt_units] & Int8(7)	# Bitwise AND with 00000111
   if xyzunits == 1
-    xyzscale = 1000.000	# meters
+    xyzscale = Float32(1000)	# meters
   elseif xyzunits == 2
-    xyzscale =    1.000	# mm
+    xyzscale = Float32(1)	# mm
   elseif xyzunits == 3
-    xyzscale =     .001	# microns
+    xyzscale = Float32(.001)	# microns
   else
     println("WARNING: xyz units code " * string(xyzunits) * 
             " is unrecognized, assuming mm")
-    xyzscale = 1	# just assume mm
+    xyzscale = Float32(1)	# just assume mm
   end
 
-  hdr.pixdim[2:4] = hdr.pixdim[2:4] * xyzscale
-  hdr.srow_x = hdr.srow_x * xyzscale
-  hdr.srow_y = hdr.srow_y * xyzscale
-  hdr.srow_z = hdr.srow_z * xyzscale
-
-  # Look at time units and convert to msec if needed
-  tunits = hdr.xyzt_units & Int8(56)	# Bitwise AND with 00111000
+  tunits = header[i_xyzt_units] & Int8(56)	# Bitwise AND with 00111000
   if tunits == 8
-    tscale = 1000.000	# seconds
+    tscale = Float32(1000)	# seconds
   elseif tunits == 16
-    tscale =    1.000	# msec
+    tscale = Float32(1)		# msec
   elseif tunits == 32
-    tscale =     .001	# microsec
+    tscale = Float32(.001)	# microsec
   else
-    tscale =        0	# no time scale
+    tscale = Float32(0)		# no time scale
   end
 
-  hdr.pixdim[5] = hdr.pixdim[5] * tscale
+  # "pixdim", "srow_x", "srow_y", "srow_z" fields:
+  # Convert to physical units to mm and time units to msec
+  i_pixdim = findfirst(fieldnames(NIfTIheader) .== :pixdim)
+  header[i_pixdim] = (header[i_pixdim][1],
+                      header[i_pixdim][2:4] .* xyzscale...,
+                      header[i_pixdim][5] * tscale,
+                      header[i_pixdim][6:8]...)
+
+  i_srow_x = findfirst(fieldnames(NIfTIheader) .== :srow_x)
+  header[i_srow_x] = header[i_srow_x] .* xyzscale
+
+  i_srow_y = findfirst(fieldnames(NIfTIheader) .== :srow_y)
+  header[i_srow_y] = header[i_srow_y] .* xyzscale
+
+  i_srow_z = findfirst(fieldnames(NIfTIheader) .== :srow_z)
+  header[i_srow_z] = header[i_srow_z] .* xyzscale
 
   # Change value in xyzt_units to reflect scale change
-  hdr.xyzt_units = Int8(2) | Int8(16)	# Bitwise OR of 2=mm, 16=msec
+  header[i_xyzt_units] = Int8(2) | Int8(16)	# Bitwise OR of 2=mm, 16=msec
 
   # Sform matrix
-  hdr.sform =  [hdr.srow_x'; 
-	        hdr.srow_y'; 
-	        hdr.srow_z';
-	        0 0 0 1]
+  sform = [collect(header[i_srow_x])'; 
+	   collect(header[i_srow_y])'; 
+	   collect(header[i_srow_z])';
+	   Float32.([0 0 0 1])]
 
   # Qform matrix
   # (From DG's load_nifti_hdr.m: not quite sure how all this works,
   # mainly just copied CH's code from mriio.c)
-  b = hdr.quatern_b
-  c = hdr.quatern_c
-  d = hdr.quatern_d
-  x = hdr.quatern_x
-  y = hdr.quatern_y
-  z = hdr.quatern_z
-  a = 1.0 - (b*b + c*c + d*d)
+  i_quatern_b = findfirst(fieldnames(NIfTIheader) .== :quatern_b)
+  i_quatern_c = findfirst(fieldnames(NIfTIheader) .== :quatern_c)
+  i_quatern_d = findfirst(fieldnames(NIfTIheader) .== :quatern_d)
+  i_quatern_x = findfirst(fieldnames(NIfTIheader) .== :quatern_x)
+  i_quatern_y = findfirst(fieldnames(NIfTIheader) .== :quatern_y)
+  i_quatern_z = findfirst(fieldnames(NIfTIheader) .== :quatern_z)
+  b = header[i_quatern_b]
+  c = header[i_quatern_c]
+  d = header[i_quatern_d]
+  x = header[i_quatern_x]
+  y = header[i_quatern_y]
+  z = header[i_quatern_z]
+  a = Float32(1) - (b*b + c*c + d*d)
   if abs(a) < 1.0e-7
-    a = 1.0 / sqrt(b*b + c*c + d*d)
+    a = Float32(1) / sqrt(b*b + c*c + d*d)
     b = b*a
     c = c*a
     d = d*a
-    a = 0.0
+    a = Float32(0)
   else
     a = sqrt(a)
   end
   r11 = a*a + b*b - c*c - d*d
-  r12 = 2.0*b*c - 2.0*a*d
-  r13 = 2.0*b*d + 2.0*a*c
-  r21 = 2.0*b*c + 2.0*a*d
+  r12 = 2*b*c - 2*a*d
+  r13 = 2*b*d + 2*a*c
+  r21 = 2*b*c + 2*a*d
   r22 = a*a + c*c - b*b - d*d
-  r23 = 2.0*c*d - 2.0*a*b
-  r31 = 2.0*b*d - 2*a*c
-  r32 = 2.0*c*d + 2*a*b
+  r23 = 2*c*d - 2*a*b
+  r31 = 2*b*d - 2*a*c
+  r32 = 2*c*d + 2*a*b
   r33 = a*a + d*d - c*c - b*b
-  if hdr.pixdim[1] < 0.0
+  if header[i_pixdim][1] < 0.0
     r13 = -r13
     r23 = -r23
     r33 = -r33
   end
   qMdc = [r11 r12 r13; r21 r22 r23; r31 r32 r33]
-  D = Diagonal(hdr.pixdim[2:4])
+  D = Diagonal(collect(header[i_pixdim][2:4]))
   P0 = [x y z]'
-  hdr.qform = [qMdc*D P0; 0 0 0 1]
+  qform = [qMdc*D P0; 0 0 0 1]
 
-  if hdr.sform_code != 0
+  # "sform_code", "qform_code" fields:
+  # Determine which matrix to use as vox2ras
+  i_sform_code = findfirst(fieldnames(NIfTIheader) .== :sform_code)
+  i_qform_code = findfirst(fieldnames(NIfTIheader) .== :qform_code)
+
+  if header[i_sform_code] != 0
     # Use sform first
-    hdr.vox2ras = hdr.sform
-  elseif hdr.qform_code != 0
+    vox2ras = sform
+  elseif header[i_qform_code] != 0
     # Then use qform first
-    hdr.vox2ras = hdr.qform
+    vox2ras = qform
   else
     println("WARNING: neither sform or qform are valid in " * fname)
-    D = Diagonal(hdr.pixdim[2:4])
+    D = Diagonal(collect(header[i_pixdim][2:4]))
     P0 = [0 0 0]'
-    hdr.vox2ras = [D P0; 0 0 0 1]
+    vox2ras = [D P0; 0 0 0 1]
   end
 
-  return hdr
+  return NIfTIheader(header..., do_bswap, sform, qform, vox2ras)
 end
 
 
 """
-    load_nifti(fname::String, hdronly::Bool=false)
+    load_nifti(fname::String, hdronly::Bool=false) -> NIfTIheader, Array
 
-Load a NIfTI (.nii or .nii.gz) volume from disk and return a `NIfTIheader`
-structure.
+Load a NIfTI (.nii or .nii.gz) volume from disk and return an array containing
+the image data and a `NIfTIheader` structure and the image data as an array.
 
 Handle compressed NIfTI (nii.gz) by issuing an external Unix call to
 uncompress the file to a temporary file, which is then deleted.
 
-The output structure contains:
-- the image data, in the .vol field
+The output `NIfTIheader` structure contains:
 - the units for each dimension of the volume [mm or msec], in the .pixdim field
 - the sform and qform matrices, in the .sform and .qform fields
 - the vox2ras matrix, which is the sform (if valid), otherwise the qform, in
   the .vox2ras field
-
-Handle data structures with more than 32k cols by looking at the .dim field.
-If dim[2] = -1, then the .glmin field contains the numbfer of columns. This is
-FreeSurfer specific, for handling surfaces. When the total number of spatial
-voxels equals 163842, then reshape the volume to 163842x1x1xnframes. This is
-for handling the 7th order icosahedron used by FS group analysis.
 """
 function load_nifti(fname::String, hdronly::Bool=false)
 
@@ -1442,29 +1427,17 @@ function load_nifti(fname::String, hdronly::Bool=false)
     return hdr
   end
 
-  # Check for ico7
-  nspatial = prod(Int32.(hdr.dim[2:4]))
-  IsIco7 = (nspatial == 163842)
-
   # If only header is desired, return now
   if hdronly
     if gzipped		# Clean up
       cmd = `rm -f $tmpfile`
       run(cmd)
     end
-    if IsIco7		# Reshape
-      hdr.dim[2] = 163842
-      hdr.dim[3] = 1
-      hdr.dim[4] = 1
-    end
     return hdr
   end
 
   # Get volume dimensions
-  dim = hdr.dim[2:end]
-  while (dim[end] == 0) && !isempty(dim)
-    pop!(dim)
-  end
+  dim = hdr.dim[2:findlast(hdr.dim .!= 0)]
 
   # Open to read the pixel data
   io = open(tmpfile, "r")
@@ -1497,7 +1470,7 @@ function load_nifti(fname::String, hdronly::Bool=false)
     error("Data type " * string(hdr.datatype) * " not supported")
   end
 
-  hdr.vol = read!(io, Array{dtype}(undef, Tuple(dim)))
+  vol = read!(io, Array{dtype}(undef, dim))
 
   close(io)
   if gzipped		# Clean up
@@ -1507,31 +1480,22 @@ function load_nifti(fname::String, hdronly::Bool=false)
 
   # Check if end-of-file was reached
   if !eof(io)
-    error(tmpfile * ", read a " * string(size(hdr.vol)) *
+    error(tmpfile * ", read a " * string(size(vol)) *
           " volume but did not reach end of file")
   end
 
   # If needed, reverse order of bytes to correct endian-ness
-  if hdr.do_bswap == 1
-    hdr.vol = bswap.(hdr.vol)
+  if hdr.do_bswap
+    vol .= bswap.(vol)
   end
 
-  if IsIco7
-    hdr.dim[2] = 163842
-    hdr.dim[3] = 1
-    hdr.dim[4] = 1
-    dim = hdr.dim[2:end]
-
-    hdr.vol = reshape(hdr.vol, Tuple(dim))
-  end
-
-  if hdr.scl_slope!=0 && !(hdr.scl_inter==0 && hdr.scl_slope==1)
+  if hdr.scl_slope != 0 && !(hdr.scl_inter == 0 && hdr.scl_slope == 1)
     # Rescaling is not needed if the slope==1 and intersect==0,
     # skipping this preserves the numeric class of the data
-    hdr.vol = Float64(hdr.vol) .* hdr.scl_slope .+ hdr.scl_inter
+    vol .= dtype.(vol .* hdr.scl_slope .+ hdr.scl_inter)
   end
 
-  return hdr
+  return hdr, vol
 end
 
 
@@ -1600,87 +1564,163 @@ function mri_write(mri::MRI, outfile::String, datatype::DataType=Float32)
       err = save_mgh(mri.vol, fname, M, mr_parms)
     end
   elseif any(cmp.(fext, ["nii", "nii.gz"]) .== 0)	#------- NIfTI -------#
-    hdr = NIfTIheader()
+    hdr_sizeof_hdr    = Int32(348)
+    hdr_data_type     = Tuple(zeros(UInt8, 10))
+    hdr_db_name       = Tuple(zeros(UInt8, 18))
+    hdr_extents       = Int32(0)
+    hdr_session_error = Int16(0)
+    hdr_regular       = UInt8(0)
+    hdr_dim_info      = UInt8(0)
 
-    hdr.db_name   = zeros(UInt8, 18)
-    hdr.data_type = zeros(UInt8, 10)
+    dim = ones(Int16, 8)
+    dim[1] = mri.nframes > 1 ? 4 : 3
+    dim[2:4] = mri.ispermuted ? mri.volsize[[2,1,3]] : mri.volsize[1:3]
+    dim[5] = mri.nframes
 
-    if mri.ispermuted
-      hdr.dim = vcat(mri.volsize[[2,1,3]], mri.nframes)
-    else
-      hdr.dim = vcat(mri.volsize[1:3], mri.nframes)
+    # This is to accomodate structures with more than 32k cols
+    # FreeSurfer specific. See also mriio.c.
+    if dim[2] > 2^15
+      hdr_glmin = dim[2]
+      dim[2] = -1
     end
 
+    hdr_dim = Tuple(dim)
+
+    hdr_intent_p1   = Float32(0)
+    hdr_intent_p2   = Float32(0)
+    hdr_intent_p3   = Float32(0)
+    hdr_intent_code = Int16(0)
+
     if datatype == UInt8
-      hdr.datatype = 2
-      hdr.bitpix   = 8
+      hdr_datatype = Int16(2)
+      hdr_bitpix   = Int16(8)
     elseif datatype == Int16
-      hdr.datatype = 4
-      hdr.bitpix   = 16
+      hdr_datatype = Int16(4)
+      hdr_bitpix   = Int16(16)
     elseif datatype == Int32
-      hdr.datatype = 8
-      hdr.bitpix   = 32
+      hdr_datatype = Int16(8)
+      hdr_bitpix   = Int16(32)
     elseif datatype == Float32
-      hdr.datatype = 16
-      hdr.bitpix   = 32
+      hdr_datatype = Int16(16)
+      hdr_bitpix   = Int16(32)
     elseif datatype == Float64
-      hdr.datatype = 64
-      hdr.bitpix   = 64
+      hdr_datatype = Int16(64)
+      hdr_bitpix   = Int16(64)
     elseif datatype == Int8
-      hdr.datatype = 256
-      hdr.bitpix   = 8
+      hdr_datatype = Int16(256)
+      hdr_bitpix   = Int16(8)
     elseif datatype == UInt16
-      hdr.datatype = 512
-      hdr.bitpix   = 16
+      hdr_datatype = Int16(512)
+      hdr_bitpix   = Int16(16)
     elseif datatype == UInt32
-      hdr.datatype = 768
-      hdr.bitpix   = 32
+      hdr_datatype = Int16(768)
+      hdr_bitpix   = Int16(32)
     else
       error("Data type " * string(datatype) * " not supported")
     end
 
+    hdr_slice_start = Int16(0)
+
     if mri.ispermuted
-      hdr.pixdim = vcat(0, mri.volres[[2,1,3]], mri.tr)	# Physical units
+      hdr_pixdim = Float32.((0, mri.volres[[2,1,3]]..., mri.tr, 0, 0, 0))
     else
-      hdr.pixdim = vcat(0, mri.volres[1:3], mri.tr)	# Physical units
+      hdr_pixdim = Float32.((0, mri.volres[1:3]..., mri.tr, 0, 0, 0))
     end
 
-    hdr.vox_offset = 348				# Will be set again
-    hdr.scl_slope = mri.niftihdr.scl_slope
-    hdr.scl_inter = mri.niftihdr.scl_inter
+    hdr_vox_offset = Float32(352)
+    hdr_scl_slope  = mri.niftihdr.scl_slope
+    hdr_scl_inter  = mri.niftihdr.scl_inter
+    hdr_slice_end  = Int16(0)
+    hdr_slice_code = Int8(0)
   
-    hdr.xyzt_units = Int8(2) | Int8(16)   # Bitwise OR of 2=mm, 16=msec
+    hdr_xyzt_units = Int8(2) | Int8(16)   # Bitwise OR of 2=mm, 16=msec
 
-    hdr.cal_max = maximum(mri.vol)
-    hdr.cal_min = minimum(mri.vol)
-    hdr.descrip = collect(@sprintf("%-80s","FreeSurfer julia"))
-    hdr.aux_file = [UInt8(0)]
-    hdr.qform_code = 1	# 1=NIFTI_XFORM_SCANNER_ANAT
-    hdr.sform_code = 1	# 1=NIFTI_XFORM_SCANNER_ANAT
+    hdr_cal_max        = maximum(mri.vol)
+    hdr_cal_min        = minimum(mri.vol)
+    hdr_slice_duration = Float32(0)
+    hdr_toffset        = Float32(0)
+    hdr_glmax          = Int32(0)
+    if dim[2] != -1
+      hdr_glmin        = Int32(0)
+    end
+    hdr_descrip        = UInt8.(Tuple(@sprintf("%-80s","FreeSurfer julia")))
+    hdr_aux_file       = Tuple(zeros(UInt8, 24))
+    hdr_qform_code     = Int16(1)		# 1=NIFTI_XFORM_SCANNER_ANAT
+    hdr_sform_code     = Int16(1)		# 1=NIFTI_XFORM_SCANNER_ANAT
   
     # Qform (must have 6 DOF)
     (b, c, d, x, y, z, qfac) = vox2ras_to_qform(mri.vox2ras0)
-    hdr.pixdim[1] = qfac
-    hdr.quatern_b = b
-    hdr.quatern_c = c
-    hdr.quatern_d = d
-    hdr.quatern_x = x
-    hdr.quatern_y = y
-    hdr.quatern_z = z
+    hdr_pixdim    = (Float32(qfac), hdr_pixdim[2:end]...)
+    hdr_quatern_b = Float32(b)
+    hdr_quatern_c = Float32(c)
+    hdr_quatern_d = Float32(d)
+    hdr_quatern_x = Float32(x)
+    hdr_quatern_y = Float32(y)
+    hdr_quatern_z = Float32(z)
+
     # Sform (can be any affine)
-    hdr.srow_x = mri.vox2ras0[1,:]
-    hdr.srow_y = mri.vox2ras0[2,:]
-    hdr.srow_z = mri.vox2ras0[3,:]
-    hdr.intent_name = collect("huh?")
-    hdr.magic = collect("n+1")
+    hdr_srow_x = Tuple(Float32.(mri.vox2ras0[1,:]))
+    hdr_srow_y = Tuple(Float32.(mri.vox2ras0[2,:]))
+    hdr_srow_z = Tuple(Float32.(mri.vox2ras0[3,:]))
+
+    hdr_intent_name = (UInt8.(collect("huh?"))..., zeros(UInt8, 12)...)
+    hdr_magic       = Tuple(collect("n+1\0"))
+
+    hdr = NIfTIheader( hdr_sizeof_hdr,
+                       hdr_data_type,
+                       hdr_db_name,
+                       hdr_extents,
+                       hdr_session_error,
+                       hdr_regular,
+                       hdr_dim_info,
+                       hdr_dim,
+                       hdr_intent_p1,
+                       hdr_intent_p2,
+                       hdr_intent_p3,
+                       hdr_intent_code,
+                       hdr_datatype,
+                       hdr_bitpix,
+                       hdr_slice_start,
+                       hdr_pixdim,
+                       hdr_vox_offset,
+                       hdr_scl_slope,
+                       hdr_scl_inter,
+                       hdr_slice_end,
+                       hdr_slice_code,
+                       hdr_xyzt_units,
+                       hdr_cal_max,
+                       hdr_cal_min,
+                       hdr_slice_duration,
+                       hdr_toffset,
+                       hdr_glmax,
+                       hdr_glmin,
+                       hdr_descrip,
+                       hdr_aux_file,
+                       hdr_qform_code,
+                       hdr_sform_code,
+                       hdr_quatern_b,
+                       hdr_quatern_c,
+                       hdr_quatern_d,
+                       hdr_quatern_x,
+                       hdr_quatern_y,
+                       hdr_quatern_z,
+                       hdr_srow_x,
+                       hdr_srow_y,
+                       hdr_srow_z,
+                       hdr_intent_name,
+                       hdr_magic,
+                       UInt8(0),
+                       Matrix{Float32}(undef, 0, 0),
+                       Matrix{Float32}(undef, 0, 0),
+                       Matrix{Float32}(undef, 0, 0) )
 
     if mri.ispermuted
-      hdr.vol = permutedims(mri.vol, [2; 1; 3:ndims(mri.vol)])
+      vol = permutedims(mri.vol, [2; 1; 3:ndims(mri.vol)])
     else
-      hdr.vol = mri.vol
+      vol = mri.vol
     end
 
-    err = save_nifti(hdr, fname)
+    err = save_nifti(hdr, vol, fname)
   else
     error("File extension " * fext * " not supported")
   end
@@ -1823,15 +1863,16 @@ end
 
 
 """
-    save_nifti(hdr::NIfTIheader, fname::String)
+    save_nifti(hdr::NIfTIheader, vol::Array{T}, fname::String) where T<:Number
 
 Write an MRI volume to a .nii or .nii.gz file. Return true is an error occurred
 (i.e., the number of bytes written were not as expected based on the size of
 the volume).
 
 # Arguments
-- `hdr::NIfTIheader`: a NIfTI header structure that contains the image data in
-  its .vol field
+- `hdr::NIfTIheader`: a NIfTI header structure
+
+- `vol::Array{T}`: an array that contains the image data
 
 - `fname::String`: path to the output file
 
@@ -1841,7 +1882,7 @@ exception to this is when the total number of spatial voxels equals 163842,
 then the volume is reshaped to 27307x1x6xnframes. This is for handling the 7th
 order icosahedron used by FS group analysis.
 """
-function save_nifti(hdr::NIfTIheader, fname::String)
+function save_nifti(hdr::NIfTIheader, vol::Array{T}, fname::String) where T<:Number
 
   ext = lowercase(fname[(end-1):end])
   if cmp(ext, "gz") == 0
@@ -1852,100 +1893,62 @@ function save_nifti(hdr::NIfTIheader, fname::String)
   end
 
   # Check for ico7
-  sz = size(hdr.vol)
+  sz = size(vol)
   if sz[1] == 163842
-    dim = (27307, 1, 6, size(hdr.vol,4))
-    hdr.vol = reshape(hdr.vol, dim)
+    dim = (27307, 1, 6, size(vol,4))
+    vol = reshape(vol, dim)
   end
 
   io = open(fname, "w")
 
-  hdr.data_type = vcat(hdr.data_type,
-                       repeat([UInt8(0)], 10-length(hdr.data_type)))
-  hdr.db_name   = vcat(hdr.db_name, 
-                       repeat([UInt8(0)], 18-length(hdr.db_name)))
-
-  hdr.dim = ones(8)
-  if size(hdr.vol, 4) > 1
-    hdr.dim[1] = 4
-  else 
-    hdr.dim[1] = 3
-  end
-  for k in (2:5)
-    hdr.dim[k] = size(hdr.vol, k-1)
-  end
-
-  # This is to accomodate structures with more than 32k cols
-  # FreeSurfer specific. See also mriio.c.
-  if hdr.dim[2] > 2^15
-    hdr.glmin = hdr.dim[2]
-    hdr.dim[2] = -1
-  end
-
-  hdr.pixdim      = vcat(hdr.pixdim, zeros(8-length(hdr.pixdim)))
-
-  hdr.descrip     = vcat(hdr.descrip,
-                         repeat([UInt8(0)], 80-length(hdr.descrip)))
- 
-  hdr.aux_file    = vcat(hdr.aux_file,
-                         repeat([UInt8(0)], 24-length(hdr.aux_file)))
- 
-  hdr.intent_name = vcat(hdr.intent_name,
-                         repeat([UInt8(0)], 16-length(hdr.intent_name)))
- 
-  hdr.magic       = vcat(hdr.magic,
-                         repeat([UInt8(0)], 4-length(hdr.magic)))
- 
-  hdr.vox_offset = 352	# not 348
-
   nb = 0
 
-  nb += write(io, Int32(348))
-  nb += write(io, UInt8.(hdr.data_type))
-  nb += write(io, UInt8.(hdr.db_name))
-  nb += write(io, Int32(hdr.extents))
-  nb += write(io, Int16(hdr.session_error))
-  nb += write(io, UInt8(hdr.regular))
-  nb += write(io, UInt8(hdr.dim_info))
-  nb += write(io, Int16.(hdr.dim))
-  nb += write(io, Float32(hdr.intent_p1))
-  nb += write(io, Float32(hdr.intent_p2))
-  nb += write(io, Float32(hdr.intent_p3))
-  nb += write(io, Int16(hdr.intent_code))
-  nb += write(io, Int16(hdr.datatype))
-  nb += write(io, Int16(hdr.bitpix))
-  nb += write(io, Int16(hdr.slice_start))
-  nb += write(io, Float32.(hdr.pixdim))
-  nb += write(io, Float32(hdr.vox_offset))
-  nb += write(io, Float32(hdr.scl_slope))
-  nb += write(io, Float32(hdr.scl_inter))
-  nb += write(io, Int16(hdr.slice_end))
-  nb += write(io, Int8(hdr.slice_code))
-  nb += write(io, Int8(hdr.xyzt_units))
-  nb += write(io, Float32(hdr.cal_max))
-  nb += write(io, Float32(hdr.cal_min))
-  nb += write(io, Float32(hdr.slice_duration))
-  nb += write(io, Float32(hdr.toffset))
-  nb += write(io, Int32(hdr.glmax))
-  nb += write(io, Int32(hdr.glmin))
-  nb += write(io, UInt8.(hdr.descrip))
-  nb += write(io, UInt8.(hdr.aux_file))
-  nb += write(io, Int16(hdr.qform_code))
-  nb += write(io, Int16(hdr.sform_code))
-  nb += write(io, Float32(hdr.quatern_b))
-  nb += write(io, Float32(hdr.quatern_c))
-  nb += write(io, Float32(hdr.quatern_d))
-  nb += write(io, Float32(hdr.quatern_x))
-  nb += write(io, Float32(hdr.quatern_y))
-  nb += write(io, Float32(hdr.quatern_z))
-  nb += write(io, Float32.(hdr.srow_x))
-  nb += write(io, Float32.(hdr.srow_y))
-  nb += write(io, Float32.(hdr.srow_z))
-  nb += write(io, UInt8.(hdr.intent_name))
-  nb += write(io, UInt8.(hdr.magic))
+  nb += write(io, hdr.sizeof_hdr)
+  nb += write(io, collect(hdr.data_type))
+  nb += write(io, collect(hdr.db_name))
+  nb += write(io, hdr.extents)
+  nb += write(io, hdr.session_error)
+  nb += write(io, hdr.regular)
+  nb += write(io, hdr.dim_info)
+  nb += write(io, collect(hdr.dim))
+  nb += write(io, hdr.intent_p1)
+  nb += write(io, hdr.intent_p2)
+  nb += write(io, hdr.intent_p3)
+  nb += write(io, hdr.intent_code)
+  nb += write(io, hdr.datatype)
+  nb += write(io, hdr.bitpix)
+  nb += write(io, hdr.slice_start)
+  nb += write(io, collect(hdr.pixdim))
+  nb += write(io, hdr.vox_offset)
+  nb += write(io, hdr.scl_slope)
+  nb += write(io, hdr.scl_inter)
+  nb += write(io, hdr.slice_end)
+  nb += write(io, hdr.slice_code)
+  nb += write(io, hdr.xyzt_units)
+  nb += write(io, hdr.cal_max)
+  nb += write(io, hdr.cal_min)
+  nb += write(io, hdr.slice_duration)
+  nb += write(io, hdr.toffset)
+  nb += write(io, hdr.glmax)
+  nb += write(io, hdr.glmin)
+  nb += write(io, collect(hdr.descrip))
+  nb += write(io, collect(hdr.aux_file))
+  nb += write(io, hdr.qform_code)
+  nb += write(io, hdr.sform_code)
+  nb += write(io, hdr.quatern_b)
+  nb += write(io, hdr.quatern_c)
+  nb += write(io, hdr.quatern_d)
+  nb += write(io, hdr.quatern_x)
+  nb += write(io, hdr.quatern_y)
+  nb += write(io, hdr.quatern_z)
+  nb += write(io, collect(hdr.srow_x))
+  nb += write(io, collect(hdr.srow_y))
+  nb += write(io, collect(hdr.srow_z))
+  nb += write(io, collect(hdr.intent_name))
+  nb += write(io, collect(hdr.magic))
 
   # Pad to get to 352 bytes (header size is 348)
-  nb += write(io, UInt8.(zeros(4)))
+  nb += write(io, zeros(UInt8,4))
 
   if hdr.datatype == 2
     dtype = UInt8
@@ -1969,7 +1972,7 @@ function save_nifti(hdr::NIfTIheader, fname::String)
     dtype = Float32
   end
 
-  nb += write(io, dtype.(hdr.vol))
+  nb += write(io, dtype.(vol))
 
   close(io)
 
@@ -1978,7 +1981,7 @@ function save_nifti(hdr::NIfTIheader, fname::String)
                 sizeof(Int16) * 16 +
                 sizeof(Int8) * 2 +
                 sizeof(UInt8) * 158 +
-                sizeof(dtype) * length(hdr.vol)))
+                sizeof(dtype) * length(vol)))
 
   if gzip_needed
     cmd = `gzip -f $fname`
