@@ -524,10 +524,10 @@ function rumba_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_724, niter::Integer
 					### TODO: Do half Kernel above?
 					###
 
-  fodf  = MRI(mask, nvert)
-  fcsf  = MRI(mask, 1)
-  fgm   = MRI(mask, 1)
-  var   = MRI(mask, 1)
+  fodf  = MRI(mask, nvert, Float32)
+  fcsf  = MRI(mask, 1, Float32)
+  fgm   = MRI(mask, 1, Float32)
+  var   = MRI(mask, 1, Float32)
 
   #
   # Reconstruct fODFs
@@ -541,18 +541,18 @@ function rumba_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_724, niter::Integer
   #
   # Add isotropic components to ODF and normalize to sum=1
   #
-  fodf.vol = fodf.vol .+ f_iso
+  fodf.vol .= fodf.vol .+ f_iso
 
-  fodf.vol = fodf.vol ./ sum(fodf.vol, dims=4)
+  fodf.vol .= fodf.vol ./ sum(fodf.vol, dims=4)
   fodf.vol[isnan.(fodf.vol)] .= 0;
 
   #
   # Compute GFA
   #
-  gfa = MRI(mask, 1)
+  gfa = MRI(mask, 1, Float32)
 
 #### TODO: Can provide a pre-computed mean to std -> fill(1/size(fodf.vol,4))
-  gfa.vol = std(fodf.vol, dims=4) ./ sqrt.(mean(fodf.vol.^2, dims=4))
+  gfa.vol .= std(fodf.vol, dims=4) ./ sqrt.(mean(fodf.vol.^2, dims=4))
   gfa.vol[isnan.(gfa.vol)] .= 0
 
   #
@@ -567,7 +567,7 @@ function rumba_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_724, niter::Integer
   peak = Vector{MRI}(undef, npeak);
 
   for ipeak in 1:npeak
-    peak[ipeak] = MRI(mask, 3)
+    peak[ipeak] = MRI(mask, 3, Float32)
     peak[ipeak].vol = peak_mat[:, :, :, 3*ipeak .+ (-2:0)]
   end
 

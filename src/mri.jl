@@ -89,8 +89,8 @@ end
 
 
 "Container for header and image data of an MRI volume or volume series"
-mutable struct MRI
-  vol::Array
+mutable struct MRI{A<:AbstractArray}
+  vol::A
   ispermuted::Bool
   niftihdr::NIfTIheader
 
@@ -142,12 +142,12 @@ end
 
 
 """
-    MRI()
+    MRI(vol::Array{T,N}) where T<:Number
 
 Return an empty `MRI` structure
 """
-MRI() = MRI(
-  [],
+MRI(vol::Array{T}) where T<:Number = MRI(
+  vol,
   false,
   NIfTIheader(Int32(0),
               Tuple(zeros(UInt8, 10)),
@@ -247,7 +247,7 @@ MRI() = MRI(
 
 
 """
-    MRI(ref::MRI, nframes::Integer=ref.nframes)
+    MRI(ref::MRI{A}, nframes::Integer=ref.nframes, datatype::DataType=eltype(A)) where A<:AbstractArray
 
 Return an `MRI` structure whose header fields are populated based on a
 reference `MRI` structure `ref`, and whose image array are populated with
@@ -256,10 +256,14 @@ zeros.
 Optionally, the new `MRI` structure can be created with a different number of
 frames (`nframes`) than the reference MRI structure.
 """
-function MRI(ref::MRI, nframes::Integer=ref.nframes)
+function MRI(ref::MRI{A}, nframes::Integer=ref.nframes, datatype::DataType=eltype(A)) where A<:AbstractArray
 
-  mri = MRI()
-
+  if nframes == 1
+    mri = MRI(zeros(datatype, ref.volsize...))
+  else
+    mri = MRI(zeros(datatype, ref.volsize..., nframes))
+  end
+  
   for var in fieldnames(MRI)
     any(var .== (:vol, :fspec, :bval, :bvec)) && continue
     setfield!(mri, var, getfield(ref, var))
@@ -267,12 +271,6 @@ function MRI(ref::MRI, nframes::Integer=ref.nframes)
 
   mri.nframes = nframes
 
-  if nframes == 1
-    mri.vol = zeros(Float32, ref.volsize...)
-  else
-    mri.vol = zeros(Float32, ref.volsize..., nframes)
-  end
-  
   return mri
 end
 
@@ -616,8 +614,6 @@ In the `MRI` structure:
 """
 function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=false)
 
-  mri = MRI()
-
   if isdir(infile)					#------ Bruker -------#
     mri = load_bruker(infile)
   else
@@ -626,12 +622,14 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
       error("Cannot determine format of " * infile)
     end
 
-    mri.fspec = fname
-    mri.pwd = pwd()
-
     if any(fext .== ["mgh", "mgz"])			#-------- MGH --------#
-      (mri.vol, M, mr_parms, volsz) = 
+      (vol, M, mr_parms, volsz) = 
        load_mgh(fname, nothing, nothing, headeronly)
+
+      mri = MRI(vol)
+
+      mri.fspec = fname
+      mri.pwd = pwd()
 
       if !isempty(mr_parms)
         (mri.tr, mri.flip_angle, mri.te, mri.ti) = mr_parms
@@ -646,25 +644,28 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
       mri.volsize = volsz[1:3]
       mri.nframes = length(volsz) < 4 ? 1 : volsz[4]
     elseif any(fext .== ["nii", "nii.gz"])		#------- NIfTI -------#
-      hdr, vol = load_nifti(fname, headeronly)
+      if headeronly
+        hdr = load_nifti(fname, headeronly)
+      else
+        hdr, vol = load_nifti(fname, headeronly)
 
-      if !headeronly && isempty(vol)
-        error("Loading " * fname * " as NIfTI")
+        isempty(vol) && error("Loading " * fname * " as NIfTI")
       end
 
       # Compatibility with MRIread.m:
       # When data have > 4 dims, put all data into dim 4.
       volsz = Int.(hdr.dim[2:end])
       volsz = volsz[findall(volsz.>0)]
-      if headeronly
-        mri.vol = []
-      else
-        mri.vol = vol
-
-        if length(volsz) > 4
-          mri.vol = reshape(mri.vol, volsz[1], volsz[2], volsz[3], :)
+      if ~headeronly
+        if length(volsz) < 5
+          mri = MRI(vol)
+        else
+          mri = MRI(reshape(vol, volsz[1], volsz[2], volsz[3], :))
         end
       end
+
+      mri.fspec = fname
+      mri.pwd = pwd()
 
       mri.niftihdr = hdr
 
@@ -819,7 +820,7 @@ function load_bruker(indir::String, headeronly::Bool=false)
           "method, acqp, pdata/1/reco, pdata/1/2dseq")
   end
 
-  mri = MRI()
+  mri = MRI(Array{Float32, 4}(undef, (0, 0, 0, 0)))
 
   mri.fspec = imgfile
   mri.pwd = pwd()

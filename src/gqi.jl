@@ -130,13 +130,13 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
 
   W = GQIwork(dwi.bval, dwi.bvec, odf_dirs, σ)
 
-  odf  = MRI(mask, W.nvert)
+  odf  = MRI(mask, W.nvert, Float32)
   peak = Vector{MRI}(undef, npeak)
   qa   = Vector{MRI}(undef, npeak)
 
   for ipeak in 1:npeak
-    peak[ipeak] = MRI(mask, 3)
-    qa[ipeak]   = MRI(mask, 1)
+    peak[ipeak] = MRI(mask, 3, Float32)
+    qa[ipeak]   = MRI(mask, 1, Float32)
   end
 
   odfmax = 0
