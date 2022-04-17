@@ -25,6 +25,74 @@ end
 
 
 """
+    GQIwork{T}
+
+Pre-allocated workspace for GQI reconstruction computations
+
+- `T::DataType`         : Data type for computations (default: `Float32`)
+- `nvol::Int`           : Number of volumes in DWI series
+- `nvert::Int`          : Number of ODF vertices (on the half sphere)
+- `isort::Vector{Int}`  : Indices of ODF peak vertices (sorted) [`nvert`]
+- `s::Vector{T}`        : DWI signal [`nvol`]
+- `o::Vector{T}`        : ODF amplitudes [`nvert`]
+- `odf_peak::Vector{T}` : ODF amplitudes at local peaks [`nvert`]
+- `faces::Matrix{Int}`  : ODF faces (on the half sphere) [nvert x 3]
+- `A::Matrix{T}`        : System matrix [nvert x nvol]
+"""
+struct GQIwork{T}
+  nvol::Int
+  nvert::Int
+  isort::Vector{Int}
+  s::Vector{T}
+  o::Vector{T}
+  odf_peak::Vector{T}
+  faces::Matrix{Int}
+  A::Matrix{T}
+
+  function GQIwork(bval::Vector{Float32}, bvec::Matrix{Float32}, odf_dirs::ODF=sphere_642, σ::Float32=Float32(1.25), T::DataType=Float32)
+
+    # Number of volumes in DWI series
+    nvol = length(bval)
+
+    # Number of ODF vertices (on the half sphere)
+    nvert = div(size(odf_dirs.vertices, 1), 2)
+
+    # Indices of sorted ODF peaks
+    isort = Vector{Int}(undef, nvert)
+
+    # DWI signal
+    s = Vector{T}(undef, nvol)
+
+    # ODF amplitudes
+    o = Vector{T}(undef, nvert)
+
+    # ODF amplitudes at local peaks
+    odf_peak = Vector{T}(undef, nvert)
+
+    # ODF faces (on the half sphere)
+    faces = copy(odf_dirs.faces)
+    faces[faces .> nvert] .-= nvert
+
+    # System matrix
+    A = Matrix{T}(undef, nvert, nvol)
+    bq_vector = bvec .* (sqrt.(bval * T(0.01506)) * T(σ / π))
+    A .= sinc.(odf_dirs.vertices[nvert+1:end, :] * bq_vector')
+
+    new{T}(
+      nvol,
+      nvert,
+      isort,
+      s,
+      o,
+      odf_peak,
+      faces,
+      A
+    )
+  end
+end
+
+
+"""
     gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Float32(1.25))
 
 Perform generalized q-space imaging (GQI) reconstruction of DWIs, and return a
@@ -60,13 +128,9 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
 
   npeak = 3;
 
-  nvert = size(odf_dirs.vertices, 1);
+  W = GQIwork(dwi.bval, dwi.bvec, odf_dirs, σ)
 
-  # GQI reconstruction matrix (half sphere)
-  bq_vector = dwi.bvec .* (sqrt.(dwi.bval * Float32(0.01506)) * (σ / π))
-  A = sinc.(odf_dirs.vertices[div(nvert,2)+1:end, :] * bq_vector')
-
-  odf  = MRI(mask, div(nvert,2))
+  odf  = MRI(mask, W.nvert)
   peak = Vector{MRI}(undef, npeak)
   qa   = Vector{MRI}(undef, npeak)
 
@@ -82,22 +146,25 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
       for ix in 1:size(dwi.vol, 1)
         mask.vol[ix, iy, iz] == 0 && continue
 
-        s = dwi.vol[ix, iy, iz, :]
-        s[s .< 0] .= 0
+        W.s .= dwi.vol[ix, iy, iz, :]
+        W.s[W.s .< 0] .= 0
 
-        maximum(s) == 0 && continue
+        maximum(W.s) == 0 && continue
 
-        odf.vol[ix, iy, iz, :] = A * s
+        mul!(W.o, W.A, W.s)
+        odf.vol[ix, iy, iz, :] = W.o
 
-        p = find_peak(odf.vol[ix, iy, iz, :], odf_dirs.faces)
-        odfmax = max.(odfmax, mean(odf.vol[ix, iy, iz, :]))
-        odfmin = minimum(odf.vol[ix, iy, iz, :])
+        odfmax = max.(odfmax, mean(W.o))
+        odfmin = minimum(W.o)
+
+        nvalid = find_peaks!(W)
 
         for ipeak in 1:npeak
-          length(p) < ipeak && continue
+          ipeak > nvalid && continue
 
-          peak[ipeak].vol[ix, iy, iz, :] = odf_dirs.vertices[p[ipeak], :]
-          qa[ipeak].vol[ix, iy, iz]      = odf.vol[ix, iy, iz, p[ipeak]] - odfmin
+          peak[ipeak].vol[ix, iy, iz, :] = odf_dirs.vertices[W.isort[ipeak], :]
+          qa[ipeak].vol[ix, iy, iz]      = odf.vol[ix, iy, iz, W.isort[ipeak]] -
+                                           odfmin
         end
       end
     end
@@ -112,26 +179,23 @@ end
 
 
 """
-    find_peak(odf::Vector, odf_faces::Matrix)
+    find_peaks!(W::GQIwork)
 
-Given the ODF amplitudes in a voxel (`odf`) and the faces of the ODF
-tessellation (`odf_faces`), find the 3 vertices with peak ODF amplitudes
+Find the vertices whose amplitudes are local peaks and return them sorted
+(assume that ODF amplitudes have been computed)
 """
-function find_peak(odf::Vector, odf_faces::Matrix)
-  faces = odf_faces - (odf_faces .> length(odf))*length(odf)
+function find_peaks!(W::GQIwork)
+  W.odf_peak .= W.o
+  W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,1]] .||
+                     W.o[W.faces[:,3]] .>= W.o[W.faces[:,1]], 1]] .= 0
+  W.odf_peak[W.faces[W.o[W.faces[:,1]] .>= W.o[W.faces[:,2]] .||
+                     W.o[W.faces[:,3]] .>= W.o[W.faces[:,2]], 2]] .= 0
+  W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,3]] .||
+                     W.o[W.faces[:,1]] .>= W.o[W.faces[:,3]], 3]] .= 0
 
-  is_peak = copy(odf)
-  is_peak[faces[odf[faces[:,2]] .>= odf[faces[:,1]] .||
-                odf[faces[:,3]] .>= odf[faces[:,1]], 1]] .= 0
-  is_peak[faces[odf[faces[:,1]] .>= odf[faces[:,2]] .||
-                odf[faces[:,3]] .>= odf[faces[:,2]], 2]] .= 0
-  is_peak[faces[odf[faces[:,2]] .>= odf[faces[:,3]] .||
-                odf[faces[:,1]] .>= odf[faces[:,3]], 3]] .= 0
+  sortperm!(W.isort, W.odf_peak, rev=true)
 
-  isort = sortperm(-is_peak)
-  p = isort[-is_peak[isort] .< 0]
-
-  return p
+  return length(findall(W.odf_peak .> 0))
 end
 
 

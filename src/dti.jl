@@ -33,7 +33,147 @@ end
 
 
 """
-    adc_fit(dwi::MRI, mask:MRI)
+    ADCwork{T}
+
+Pre-allocated workspace for ADC fit computations
+
+- `T::DataType`        : Data type for computations (default: `Float32`)
+- `nvol::Int`          : Number of volumes in DWI series
+- `ib0::Vector{Bool}`  : Indicator for b=0 volumes [`nvol`]
+- `ipos::Vector{Bool}` : Indicator for volumes with positive DWI signal [`nvol`]
+- `logs::Vector{T}`    : Logarithm of DWI signal [`nvol`]
+- `d::Vector{T}`       : Linear system solution vector [2]
+- `A::Matrix{T}`       : System matrix [nvol x 2]
+- `pA::Matrix{T}`      : Pseudo-inverse of system matrix [2 x nvol]
+"""
+struct ADCwork{T}
+  nvol::Int
+  ib0::Vector{Bool}
+  ipos::Vector{Bool}
+  logs::Vector{T}
+  d::Vector{T}
+  A::Matrix{T}
+  pA::Matrix{T}
+  D::Matrix{T}
+
+  function ADCwork(bval::Vector{Float32}, T::DataType=Float32)
+
+    # Number of volumes in DWI series
+    nvol = length(bval)
+
+    # Indicator for b=0 volumes
+    ib0  = (bval .== minimum(bval))
+
+    # Indicator for volumes with positive DWI signal
+    ipos = Vector{Bool}(undef, nvol)
+
+    # System matrix
+    A = Matrix{T}(undef, nvol, 2)
+
+    A[:,1] = -bval
+    A[:,2] = ones(T, nvol)
+
+    # Pseudo-inverse of system matrix
+    pA = pinv(A)
+
+    # Log of DWI signal
+    logs = Vector{T}(undef, nvol)
+
+    # Linear system solution vector
+    d = Vector{T}(undef, 2)
+
+    new{T}(
+      nvol,
+      ib0,
+      ipos,
+      logs,
+      d,
+      A,
+      pA
+    )
+  end
+end
+
+
+"""
+    DTIwork{T}
+
+Pre-allocated workspace for DTI fit computations
+
+- `T::DataType`        : Data type for computations (default: `Float32`)
+- `nvol::Int`          : Number of volumes in DWI series
+- `ib0::Vector{Bool}`  : Indicator for b=0 volumes [`nvol`]
+- `ipos::Vector{Bool}` : Indicator for volumes with positive DWI signal [`nvol`]
+- `logs::Vector{T}`    : Logarithm of DWI signal [`nvol`]
+- `d::Vector{T}`       : Linear system solution vector [7]
+- `A::Matrix{T}`       : System matrix [nvol x 7]
+- `pA::Matrix{T}`      : Pseudo-inverse of system matrix [7 x nvol]
+- `D::Matrix{T}`       : Diffusion tensor [3 x 3]
+"""
+struct DTIwork{T}
+  nvol::Int
+  ib0::Vector{Bool}
+  ipos::Vector{Bool}
+  logs::Vector{T}
+  d::Vector{T}
+  A::Matrix{T}
+  pA::Matrix{T}
+  D::Matrix{T}
+
+  function DTIwork(bval::Vector{Float32},
+                   bvec::Matrix{Float32}, T::DataType=Float32)
+
+    # Number of volumes in DWI series
+    nvol = length(bval)
+
+    # Indicator for b=0 volumes
+    ib0  = (bval .== minimum(bval))
+
+    # Indicator for volumes with positive DWI signal
+    ipos = Vector{Bool}(undef, nvol)
+
+    # System matrix
+    A = Matrix{T}(undef, nvol, 7)
+
+    A[:,1] = bvec[:,1].^2
+    A[:,2] = 2*bvec[:,1].*bvec[:,2]
+    A[:,3] = 2*bvec[:,1].*bvec[:,3]
+    A[:,4] = bvec[:,2].^2
+    A[:,5] = 2*bvec[:,2].*bvec[:,3]
+    A[:,6] = bvec[:,3].^2
+
+    A[:,1:6] .*= -bval
+
+    A[:,7] = ones(T, nvol)
+
+    # Pseudo-inverse of system matrix
+    pA = pinv(A)
+
+    # Log of DWI signal
+    logs = Vector{T}(undef, nvol)
+
+    # Linear system solution vector
+    d = Vector{T}(undef, 7)
+
+    # Diffusion tensor
+    D = Matrix{T}(undef, 3, 3)
+
+    new{T}(
+      nvol,
+      ib0,
+      ipos,
+      logs,
+      d,
+      A,
+      pA,
+      D
+    )
+  end
+end
+
+
+"""
+    adc_fit(dwi::MRI, mask::MRI)
 
 Fit the apparent diffusion coefficient (ADC) to DWIs and return it as an
 `MRI` structure.
@@ -44,11 +184,7 @@ function adc_fit(dwi::MRI, mask::MRI)
     error("Missing b-value table from input DWI structure")
   end
 
-  ib0 = (dwi.bval .== minimum(dwi.bval))
-
-  A = hcat(-dwi.bval, ones(Float32, length(dwi.bval)))
-
-  pA = pinv(A)
+  W = ADCwork(dwi.bval)
 
   adc = MRI(mask, 1)
   s0  = MRI(mask, 1)
@@ -58,21 +194,8 @@ function adc_fit(dwi::MRI, mask::MRI)
       for ix in 1:size(dwi.vol, 1)
         mask.vol[ix, iy, iz] == 0 && continue
 
-        # Only use positive DWI values to fit the model
-        ipos = dwi.vol[ix, iy, iz, :] .> 0
-        npos = sum(ipos)
-
-        if npos == length(dwi.bval)
-          y = pA * log.(dwi.vol[ix, iy, iz, :])
-        elseif npos > 6
-          sum(ipos .&& ib0) == 0 && continue
-          y = pinv(A[ipos, :]) * log.(dwi.vol[ix, iy, iz, ipos])
-        else
-          continue
-        end
-
-        adc.vol[ix, iy, iz] = y[1]
-        s0.vol[ix, iy, iz]  = exp(y[2])
+        adc.vol[ix, iy, iz],
+        s0.vol[ix, iy, iz] = adc_fit(dwi.vol[ix, iy, iz, :], W)
       end
     end
   end
@@ -82,7 +205,31 @@ end
 
 
 """
-    dti_fit(dwi::MRI, mask:MRI)
+    adc_fit(dwi::Vector{T}, W::ADCwork{T}) where T<:AbstractFloat
+
+Fit the ADC for a single voxel
+"""
+function adc_fit(dwi::Vector{T}, W::ADCwork{T}) where T<:AbstractFloat
+
+  # Only use positive DWI values to fit the model
+  W.ipos .= dwi .> 0
+  npos = sum(W.ipos)
+
+  if npos == W.nvol
+    W.logs .= log.(dwi)
+    mul!(W.d, W.pA, W.logs)
+  elseif npos > 6 && any(W.ipos[W.ib0])
+    mul!(W.d, pinv(W.A[W.ipos, :]), log.(dwi[W.ipos]))
+  else
+    return zero(T), zero(T)
+  end
+
+  return W.d[1], exp(W.d[2])
+end
+
+
+"""
+    dti_fit(dwi::MRI, mask::MRI)
 
 Fit tensors to DWIs and return a `DTI` structure.
 """
@@ -101,7 +248,7 @@ end
 
 
 """
-    dti_fit_ls(dwi::MRI, mask:MRI)
+    dti_fit_ls(dwi::MRI, mask::MRI)
 
 Perform least-squares fitting of tensors from DWIs and return a `DTI` structure.
 
@@ -110,14 +257,7 @@ Peter Basser et al. (1994). Estimation of the effective self-diffusion tensor fr
 """
 function dti_fit_ls(dwi::MRI, mask::MRI)
 
-  ib0 = (dwi.bval .== minimum(dwi.bval))
-
-  A = hcat(dwi.bvec[:,1].^2, 2*dwi.bvec[:,1].*dwi.bvec[:,2],
-           2*dwi.bvec[:,1].*dwi.bvec[:,3], dwi.bvec[:,2].^2,
-           2*dwi.bvec[:,2].*dwi.bvec[:,3], dwi.bvec[:,3].^2)
-  A = hcat(-dwi.bval .* A, ones(Float32, size(A, 1), 1))
-
-  pA = pinv(A)
+  W = DTIwork(dwi.bval, dwi.bvec)
 
   S0    = MRI(mask, 1)
   Eval1 = MRI(mask, 1)
@@ -126,72 +266,86 @@ function dti_fit_ls(dwi::MRI, mask::MRI)
   Evec1 = MRI(mask, 3)
   Evec2 = MRI(mask, 3)
   Evec3 = MRI(mask, 3)
+  RD    = MRI(mask, 1)
+  MD    = MRI(mask, 1)
+  FA    = MRI(mask, 1)
 
   Threads.@threads for iz in 1:size(dwi.vol, 3)
     for iy in 1:size(dwi.vol, 2)
       for ix in 1:size(dwi.vol, 1)
         mask.vol[ix, iy, iz] == 0 && continue
 
-        # Only use positive DWI values to fit the model
-        ipos = dwi.vol[ix, iy, iz, :] .> 0
-        npos = sum(ipos)
-
-        if npos == length(dwi.bval)
-          D = pA * log.(dwi.vol[ix, iy, iz, :])
-        elseif npos > 6
-          sum(ipos .&& ib0) == 0 && continue
-          D = pinv(A[ipos, :]) * log.(dwi.vol[ix, iy, iz, ipos])
-        else
-          continue
-        end
-
-        S0.vol[ix, iy, iz] = exp(D[7])
-
-        E = eigen([D[1] D[2] D[3];
-                   D[2] D[4] D[5];
-                   D[3] D[5] D[6]])
-
-        Eval1.vol[ix, iy, iz]    = E.values[3]
-        Eval2.vol[ix, iy, iz]    = E.values[2]
-        Eval3.vol[ix, iy, iz]    = E.values[1]
-        Evec1.vol[ix, iy, iz, :] = E.vectors[:, 3]
-        Evec2.vol[ix, iy, iz, :] = E.vectors[:, 2]
-        Evec3.vol[ix, iy, iz, :] = E.vectors[:, 1]
+        S0.vol[ix, iy, iz],
+        Eval1.vol[ix, iy, iz],
+        Eval2.vol[ix, iy, iz],
+        Eval3.vol[ix, iy, iz],
+        Evec1.vol[ix, iy, iz, :],
+        Evec2.vol[ix, iy, iz, :],
+        Evec3.vol[ix, iy, iz, :],
+        RD.vol[ix, iy, iz],
+        MD.vol[ix, iy, iz],
+        FA.vol[ix, iy, iz] = dti_fit_ls(dwi.vol[ix, iy, iz, :], W)
       end
     end
   end
 
-  return DTI(S0, Eval1, Eval2, Eval3, Evec1, Evec2, Evec3,
-             dti_maps(Eval1, Eval2, Eval3)...)
+  return DTI(S0, Eval1, Eval2, Eval3, Evec1, Evec2, Evec3, RD, MD, FA)
 end
 
 
 """
-    dti_maps(eigval1::MRI, eigval2::MRI, eigval3::MRI)
+    dti_fit_ls(dwi::Vector{T}, W::DTIwork{T}) where T<:AbstractFloat
 
-Compute radial diffusivity (RD), mean diffusivity (MD), and fractional
-anisotropy (FA) maps from the 3 eigenvalues the diffusion tensors.
-
-Return RD, MD, and FA maps as MRI structures.
+Perform least-squares fitting of tensor for a single voxel
 """
-function dti_maps(eigval1::MRI, eigval2::MRI, eigval3::MRI)
+function dti_fit_ls(dwi::Vector{T}, W::DTIwork{T}) where T<:AbstractFloat
 
-  rd = MRI(eigval1)
-  md = MRI(eigval1)
-  fa = MRI(eigval1)
+  # Only use positive DWI values to fit the model
+  W.ipos .= dwi .> 0
+  npos = sum(W.ipos)
 
-  imask = (eigval1.vol .!= 0)
+  if npos == W.nvol
+    W.logs .= log.(dwi)
+    mul!(W.d, W.pA, W.logs)
+  elseif npos > 6 && any(W.ipos[W.ib0])
+    mul!(W.d, pinv(W.A[W.ipos, :]), log.(dwi[W.ipos]))
+  else
+    return zero(T), zero(T), zero(T), zero(T), 
+                    zeros(T, 3), zeros(T, 3), zeros(T, 3),
+                    zero(T), zero(T), zero(T)
+  end
 
-  rd.vol[imask] = eigval1.vol[imask] + eigval2.vol[imask]
-  md.vol[imask] = (rd.vol[imask] + eigval3.vol[imask]) / 3
-  rd.vol[imask] /= 2
+  s0 = exp(W.d[7])
 
-  fa.vol[imask] = sqrt.(((eigval1.vol[imask] - md.vol[imask]).^2 +
-                         (eigval2.vol[imask] - md.vol[imask]).^2 +
-                         (eigval3.vol[imask] - md.vol[imask]).^2) ./
-                         (eigval1.vol[imask].^2 +
-                          eigval2.vol[imask].^2 +
-                          eigval3.vol[imask].^2) * 3/2)
+  W.D[1] = W.d[1]
+  W.D[2] = W.d[2]
+  W.D[3] = W.d[3]
+  W.D[5] = W.d[4]
+  W.D[6] = W.d[5]
+  W.D[9] = W.d[6]
+
+  E = eigen!(Symmetric(W.D, :L))
+
+  return s0, E.values[3], E.values[2], E.values[1],
+             E.vectors[:, 3], E.vectors[:, 2], E.vectors[:, 1],
+             dti_maps(E.values[3], E.values[2], E.values[1])...
+end
+
+
+"""
+    dti_maps(eigval1::T, eigval2::T, eigval3::T) where T<:AbstractFloat
+
+Return the radial diffusivity (RD), mean diffusivity (MD), and fractional
+anisotropy (FA) given the 3 eigenvalues the diffusion tensor.
+"""
+function dti_maps(eigval1::T, eigval2::T, eigval3::T) where T<:AbstractFloat
+
+  rd = eigval2 + eigval3
+  md = (eigval1 + rd) / 3
+  rd /= 2
+
+  fa = sqrt(((eigval1 - md)^2 + (eigval2 - md)^2 + (eigval3 - md)^2) /
+            (eigval1^2 + eigval2^2 + eigval3^2) * T(1.5))
 
   return rd, md, fa
 end
