@@ -1516,10 +1516,11 @@ number of bytes written were not as expected based on the size of the volume).
   1. An MGH file, e.g., f.mgh or f.mgz (uncompressed or compressed)
   2. A NIfTI file, e.g., f.nii or f.nii.gz (uncompressed or compressed).
 
-- `datatype::DataType=Float32`: Only applies to NIfTI and can be UInt8, Int16,
-  Int32, Float32, Float64, Int8, UInt16, UInt32.
+- `datatype::DataType=eltype(mri.vol)`: Only applies to NIfTI and can be UInt8,
+  Int16, Int32, Float32, Float64, Int8, UInt16, UInt32. By default, the native
+  data type of the volume array is preserved when writing to disk.
 """ 
-function mri_write(mri::MRI, outfile::String, datatype::DataType=Float32)
+function mri_write(mri::MRI, outfile::String, datatype::DataType=eltype(mri.vol))
 
   err = true
 
