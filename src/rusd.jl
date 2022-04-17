@@ -30,42 +30,23 @@ end
 
 
 """
-    multi_tensor_model(φ, θ, f, λ::Vector, b::Vector, g::Matrix, s0::Number)
+    tensor_model(φ::Number, θ::Number, λ::Vector, b::Vector, g::Matrix, s0::Number)
 
-    Compute the expected diffusion signal in a voxel that contains a set of
-    compartments with orientation angles `φ`, `θ` and volume fractions `f`.
-
-    Assume that diffusion in all compartments can be modeled by a tensor with
-    eigenvalues `λ`, that the signal was acquired with b-values `b` and
+    Compute the expected diffusion-weighted signal in a voxel, assuming that
+    diffusion can be modeled by a tensor with orientation angles `φ`, `θ` and
+    eigenvalues `λ` and that the signal was acquired with b-values `b` and 
     gradient vectors `g`, and that the non-diffusion-weighted signal is `s0`.
 """
-function multi_tensor_model(φ, θ, f, λ::Vector, b::Vector, g::Matrix, s0::Number)
+function tensor_model(φ::Number, θ::Number, λ::Vector, b::Vector, g::Matrix, s0::Number)
 
   if length(λ) != 3
     error("Length of diffusivity vector " * string(λ) * " must be 3")
   end
 
-  if length(φ) != length(θ)
-    error("Lengths of polar angle (" * length(φ) * ") and " *
-          "azimuthal angle (" * length(θ) * ") vectors do not match")
-  end
+  R = ang2rot(φ, θ)
+  D = R * Diagonal(λ) * R'
 
-  if length(θ) != length(f)
-    error("Lengths of angle (" * length(θ) * ") and " *
-          "compartment volume (" * length(f) * ") vectors do not match")
-  end
-
-  Λ = Diagonal(λ)
-  fsum = sum(f)
-
-  # Iterate over compartments
-  S = 0
-  for icomp in 1:length(f)
-    R = ang2rot(φ[icomp], θ[icomp])
-    D = R*Λ*R'
-    S = S .+ f[icomp] / fsum * exp.(-b .* diag(g*D*g'))
-  end
-  S = s0*S
+  S = s0 .* exp.(-b .* diag(g*D*g'))
 
   return S
 end
@@ -85,7 +66,7 @@ Perron's continued fraction is substantially superior than Gauss' continued
 fraction when z >> nu, and only moderately inferior otherwise
 (Walter Gautschi and Josef Slavik, Math. Comp., 32(143):865-875, 1978).
 """
-function besseli_ratio(nu::Integer, z::Float32)
+function besseli_ratio(nu::Integer, z::T) where T <: AbstractFloat
 
   return z / ((2*nu + z) - 
                ((2*nu+1)*z / 
@@ -98,24 +79,20 @@ end
 """
     Gradient operator
 """
-function sd_grad(M)
+function sd_grad(M::Array{T, 3}) where T <: AbstractFloat
 
   fx = M[[2:end; end], :, :] - M
   fy = M[:, [2:end; end], :] - M
   fz = M[:, :, [2:end; end]] - M
 
-  return cat(fx, fy, fz, dims=4)
+  return fx, fy, fz
 end
 
 
 """
     Divergence operator
 """
-function sd_div(P)
-
-  Px = P[:,:,:,1]
-  Py = P[:,:,:,2]
-  Pz = P[:,:,:,3]
+function sd_div(Px::Array{T, 3}, Py::Array{T, 3}, Pz::Array{T, 3}) where T <: AbstractFloat
 
   fx = Px - Px[[1; 1:end-1], :, :]
   fx[1,:,:]   =  Px[1,:,:]	# boundary
@@ -136,15 +113,16 @@ end
 """
     Total variation regularization term
 """
-function rumba_tv(fodf_mat::Array{Float32, 3}, λ::Float32)
+function rumba_tv(fodf_mat::Array{T, 3}, λ::T) where T <: AbstractFloat
   # Compute gradient and divergence
-  Grad = sd_grad(fodf_mat)
+  Grad_x, Grad_y, Grad_z = sd_grad(fodf_mat)
 
-  d = sqrt.(sum(Grad.^2, dims=4) .+ eps(Float32))
-  Div = sd_div(Grad ./ d)
+  d = sqrt.(Grad_x.^2 .+ Grad_y.^2 .+ Grad_z.^2 .+ eps(T))
+
+  Div = sd_div(Grad_x ./ d, Grad_y ./ d, Grad_z ./ d)
 
   # abs/eps to ensure values > 0
-  tv_mat = 1 ./ (abs.(1 .- λ .* Div) .+ eps(Float32))
+  tv_mat = 1 ./ (abs.(1 .- λ .* Div) .+ eps(T))
 
   return tv_mat
 end
@@ -179,31 +157,33 @@ function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::In
   # --------------------------- Main algorithm --------------------------- #
   σ0 = Float32(1/15)
   λ = σ0^2
-  σ2 = λ * ones(Float32, size(signal_mat))
+  σ2_i = fill(λ, (1, nmask))
   ε = 1f-7
 
-  dodf_sig_mat = (signal_mat .* dodf_mat) ./ σ2
-  σ2_i = []
+  dodf_sig_mat = (signal_mat .* dodf_mat) ./ σ2_i
 
   snr_mean = snr_std = Float32(0)
+
+  Iratio = Array{Float32, 2}(undef, size(dodf_sig_mat))
+  if use_tv
+    fodf = zeros(Float32, nx, ny, nz)
+  end
+  tv_mat = ones(Float32, size(fodf_mat))
 
   @time for iter in 1:niter
     println("Iteration " * string(iter) * " of " * string(niter))
 
     # -------------------- R-L deconvolution term ------------------------ #
     # Ratio of modified Bessel functions of order n_order and n_order-1
-    Iratio = besseli_ratio.(n_order, dodf_sig_mat)
+    Iratio .= besseli_ratio.(n_order, dodf_sig_mat)
 
     rl_mat = (kernel' * (signal_mat .* Iratio)) ./
              (kernel' * dodf_mat .+ eps(Float32))
 
     # -------------------- TV regularization term ------------------------ #
-    tv_mat = ones(Float32, size(fodf_mat))
-
     @time if use_tv
       for idir in 1:size(fodf_mat, 1)
         # Embed in brain mask
-        fodf = zeros(Float32, nx, ny, nz)
         fodf[ind_mask] = fodf_mat[idir, :]
 
         tv = rumba_tv(fodf, λ)
@@ -212,27 +192,27 @@ function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::In
     end
 
     # ------------------------- Update estimate -------------------------- #
-    fodf_mat = max.(fodf_mat .* rl_mat .* tv_mat, fzero) # Enforce positivity
+    fodf_mat .= max.(fodf_mat .* rl_mat .* tv_mat, fzero) # Enforce positivity
 
     if iter <= 100		&& false
       # Energy preservation at each step that included the bias on the s0 image
       # Only used to stabilize recovery in early iterations
-      cte = sqrt(1 + 2*n_order*mean(σ2))
-      cte = sqrt(1 + n_order*mean(σ2))
+      cte = sqrt(1 + 2*n_order*mean(σ2_i))
+      cte = sqrt(1 + n_order*mean(σ2_i))
       cte = 1
       fodf_mat = cte * fodf_mat ./ (sum(fodf_mat, dims=1) .+ eps(Float32)) 
     end
 
-    dodf_mat = kernel * fodf_mat
-    dodf_sig_mat = (signal_mat .* dodf_mat) ./ σ2
+    mul!(dodf_mat, kernel, fodf_mat)
+    dodf_sig_mat .= (signal_mat .* dodf_mat) ./ σ2_i
 
     # --------------------- Noise variance estimate ---------------------- #
     σ2_i = sum((signal_mat.^2 + dodf_mat.^2)/2 -
-               (σ2 .* dodf_sig_mat) .* Iratio, dims=1) / (n_order * ndir)
+               (σ2_i .* dodf_sig_mat) .* Iratio, dims=1) / (n_order * ndir)
 
     # Assume that estimate of σ is in interval [1/snr_min, 1/snr_max],
     # where snr_min = 8 and snr_max = 80
-    σ2_i = min.(Float32((1/8)^2), max.(σ2_i, Float32((1/80)^2)))
+    σ2_i .= min.(Float32((1/8)^2), max.(σ2_i, Float32((1/80)^2)))
 
     snr_mean = mean(1 ./ sqrt.(σ2_i))
     snr_std  =  std(1 ./ sqrt.(σ2_i))
@@ -243,8 +223,6 @@ function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::In
     println("Number of coils = " * string(n_order))
 
     println("Mean sum(fODF) = " * string(mean(sum(fodf_mat, dims=1))))
-
-    σ2 = repeat(σ2_i, ndir)
 
     # ----------------- Update regularization parameter λ ----------------- #
     if use_tv
@@ -265,7 +243,7 @@ function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::In
   end
 
   # Energy preservation
-  fodf_mat = fodf_mat ./ (sum(fodf_mat, dims=1) .+ eps(Float32))
+  fodf_mat ./= (sum(fodf_mat, dims=1) .+ eps(Float32))
 
   noisevar = zeros(Float32, nx, ny, nz)
   noisevar[ind_mask] = σ2_i
@@ -298,56 +276,35 @@ Find ODF peaks, given a max number of peaks and an ODF amplitude threshold.
 """
 function rumba_peaks(fodf, odf_vertices, idx_neig, thr, f_iso, npeak_max)
 
-  nvert = size(odf_vertices, 1)
-  nhalf = Int(nvert/2)
-  half_vertices = odf_vertices[1:nhalf, :]	# Vertices on the half sphere
+  # Use higher threshold in voxels with high f_iso
+  #thr_xyz = thr + f_iso
+  thr_xyz = thr / (1 - f_iso)
 
-  (nx, ny, nz, nv) = size(fodf)
-  peaks = zeros(Float32, nx, ny, nz, 3*npeak_max)
+  # Find local maxima of ODF within a neighborhood around each vertex
+  ispeak = find_local_peaks(fodf, idx_neig, thr_xyz)
 
-  for iz in 1:nz
-    for iy in 1:ny
-      for ix in 1:nx
-        f_iso_xyz = f_iso[ix, iy, iz]
+  idx_peaks = findall(ispeak)
+  v_peaks   = odf_vertices[idx_peaks, :]
+  f_peaks   = fodf[idx_peaks]
 
-        # Use higher threshold in voxels with high f_iso
-        #thr_xyz = thr + f_iso_xyz
-        thr_xyz = thr / (1 - f_iso_xyz)
+  # Sort peaks and keep at most npeak_max of them
+  npeak = length(f_peaks)
+  ind_ord = sortperm(f_peaks, rev=true)
 
-        fodf_xyz = fodf[ix, iy, iz, 1:nhalf]	# Amplitudes on the half sphere
-
-        (sum(fodf_xyz) == 0) && continue
-
-        # Find local maxima of ODF within a neighborhood around each vertex
-        ispeak = find_local_peaks(fodf_xyz, idx_neig, thr_xyz)
-
-        idx_peaks = findall(ispeak)
-        v_peaks   = half_vertices[idx_peaks, :]
-        f_peaks   = fodf_xyz[idx_peaks]
-
-        # Sort peaks and keep at most npeak_max of them
-        npeak = length(f_peaks)
-        ind_ord = sortperm(f_peaks, rev=true)
-
-        if npeak > npeak_max
-          npeak = npeak_max
-          ind_ord = ind_ord[1:npeak_max]
-        end
-
-        idx_peaks = idx_peaks[ind_ord]
-        v_peaks   = v_peaks[ind_ord, :]
-        f_peaks   = f_peaks[ind_ord]
-
-        # Find the true volume fraction of each anisotropic compartment,
-        # factoring in the volume fractions of the isotropic compartments
-        f_peaks = f_peaks * ((1 - f_iso_xyz) / sum(f_peaks))
-
-        peaks[ix, iy, iz, 1:3*npeak] = vec((f_peaks .* v_peaks)')
-      end
-    end
+  if npeak > npeak_max
+    npeak = npeak_max
+    ind_ord = ind_ord[1:npeak_max]
   end
 
-  return peaks
+  idx_peaks = idx_peaks[ind_ord]
+  v_peaks   = v_peaks[ind_ord, :]
+  f_peaks   = f_peaks[ind_ord]
+
+  # Find the true volume fraction of each anisotropic compartment,
+  # factoring in the volume fractions of the isotropic compartments
+  f_peaks = f_peaks * ((1 - f_iso) / sum(f_peaks))
+
+  return vec((f_peaks .* v_peaks)')
 end
 
 
@@ -490,26 +447,23 @@ function rumba_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_724, niter::Integer
   #
   Kernel = Matrix{Float32}(undef, length(b), nvert+2)
 
-  fi = 1		# Assuming unit volume fraction
-  s0 = 1		# Assuming unit signal
+  s0 = 1		# Assuming unit (normalized) signal
 
   # One radially symmetric tensor compartment for each fODF vertex
   (φ, θ) = cart2sph(odf_dirs.vertices[:,1], odf_dirs.vertices[:,2],
                                             odf_dirs.vertices[:,3])
-  θ = -θ
+  θ .= -θ
 
   for ivert in 1:nvert
-    Kernel[:, ivert] .= multi_tensor_model(φ[ivert], θ[ivert], fi,
-                                          [λ_para, λ_perp, λ_perp], b, g, s0)
+    Kernel[:, ivert] .= tensor_model(φ[ivert], θ[ivert],
+                                     [λ_para, λ_perp, λ_perp], b, g, s0)
   end
 
   # One isotropic tensor compartment for CSF
-  Kernel[:, nvert+1] .= multi_tensor_model(0, 0, fi,
-                                          [λ_csf, λ_csf, λ_csf], b, g, s0)
+  Kernel[:, nvert+1] .= tensor_model(0, 0, [λ_csf, λ_csf, λ_csf], b, g, s0)
 
   # One isotropic tensor compartment for GM
-  Kernel[:, nvert+2] .= multi_tensor_model(0, 0, fi,
-                                          [λ_gm, λ_gm, λ_gm], b, g, s0)
+  Kernel[:, nvert+2] .= tensor_model(0, 0, [λ_gm, λ_gm, λ_gm], b, g, s0)
 
   #
   # Initialize fODFs
@@ -561,8 +515,19 @@ function rumba_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_724, niter::Integer
   npeak = 5			# Max number of peaks per voxel
   fthresh = Float32(.1)		# Min volume fraction to retain a peak
 
-  peak_mat =
-    rumba_peaks(fodf.vol, odf_dirs.vertices, idx_neig, fthresh, f_iso, npeak)
+  peak_mat = zeros(Float32, nx, ny, nz, 3*npeak)
+
+  for iz in 1:nz
+    for iy in 1:ny
+      for ix in 1:nx
+        (mask.vol[ix, iy, iz] == 0) && continue
+
+        vecs = rumba_peaks(fodf.vol[ix, iy, iz, :], half_vertices, idx_neig,
+                            fthresh, f_iso[ix, iy, iz], npeak)
+        peak_mat[ix, iy, iz, 1:length(vecs)] = vecs
+      end
+    end
+  end
 
   peak = Vector{MRI}(undef, npeak);
 
