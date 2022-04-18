@@ -30,6 +30,94 @@ end
 
 
 """
+    RUMBAwork{T}
+
+Pre-allocated workspace for RUMBA-SD reconstruction computations
+
+- `T::DataType`         : Data type for computations (default: `Float32`)
+- `nmask::Int`          : Number of voxels in brain mask
+- `ndir::Int`           : Number of unique diffusion-encoding directions
+- `ncomp::Int`          : Number of components in fODF signal decomposition
+- `nvox::NTuple{3,Int}` : Dimensions of image volume (or nothing if TV not used)
+- `dodf_mat::Matrix{T}` : Work matrices in diffusion ODF space
+- `dodf_sig_mat::Matrix{T}`
+- `Iratio::Matrix{T}`
+- `fodf_mat::Matrix{T}` : Work matrices in fiber ODF space
+- `rl_mat::Matrix{T}`
+- `tv_mat::Matrix{T}`
+- `tv_vol::Array{T,3}`  : Work volumes in image space
+- `Gx_vol::Array{T,3}`
+- `Gy_vol::Array{T,3}`
+- `Gz_vol::Array{T,3}`
+- `Div_vol::Array{T,3}`
+- `σ2_vec::Matrix{T}`   : Noise variance by voxel
+"""
+struct RUMBAwork{T}
+  nmask::Int
+  ndir::Int
+  ncomp::Int
+  nvox::NTuple{3,Int}
+  dodf_mat::Matrix{T}
+  dodf_sig_mat::Matrix{T}
+  Iratio::Matrix{T}
+  fodf_mat::Matrix{T}
+  rl_mat::Matrix{T}
+  tv_mat::Matrix{T}
+  tv_vol::Array{T,3}
+  Gx_vol::Array{T,3}
+  Gy_vol::Array{T,3}
+  Gz_vol::Array{T,3}
+  Div_vol::Array{T,3}
+  σ2_vec::Matrix{T}
+
+  function RUMBAwork(nmask::Int, ndir::Int, ncomp::Int,
+                     nvox::Union{NTuple{3,Int}, Nothing}=nothing,
+                     T::DataType=Float32)
+
+    # Work matrices in diffusion ODF space
+    dodf_mat     = Matrix{T}(undef, ndir, nmask)
+    dodf_sig_mat = Matrix{T}(undef, ndir, nmask)
+    Iratio       = Matrix{T}(undef, ndir, nmask)
+
+    # Work matrices in fiber ODF space
+    fodf_mat     = Matrix{T}(undef, ncomp, nmask)
+    rl_mat       = Matrix{T}(undef, ncomp, nmask)
+    tv_mat       = Matrix{T}(undef, ncomp, nmask)
+
+    # Work volumes in image space
+    isnothing(nvox) && (nvox = (0,0,0))
+    tv_vol       = Array{T,3}(undef, nvox)
+    Gx_vol       = Array{T,3}(undef, nvox)
+    Gy_vol       = Array{T,3}(undef, nvox)
+    Gz_vol       = Array{T,3}(undef, nvox)
+    Div_vol      = Array{T,3}(undef, nvox)
+
+    # Noise variance by voxel
+    σ2_vec       = Matrix{T}(undef, 1, nmask)
+
+    new{T}(
+      nmask::Int,
+      ndir::Int,
+      ncomp::Int,
+      nvox::NTuple{3,Int},
+      dodf_mat::Matrix{T},
+      dodf_sig_mat::Matrix{T},
+      Iratio::Matrix{T},
+      fodf_mat::Matrix{T},
+      rl_mat::Matrix{T},
+      tv_mat::Matrix{T},
+      tv_vol::Array{T,3},
+      Gx_vol::Array{T,3},
+      Gy_vol::Array{T,3},
+      Gz_vol::Array{T,3},
+      Div_vol::Array{T,3},
+      σ2_vec::Matrix{T}
+    )
+  end
+end
+
+
+"""
     tensor_model(φ::Number, θ::Number, λ::Vector, b::Vector, g::Matrix, s0::Number)
 
     Compute the expected diffusion-weighted signal in a voxel, assuming that
@@ -79,52 +167,54 @@ end
 """
     Gradient operator
 """
-function sd_grad(M::Array{T, 3}) where T <: AbstractFloat
+function sd_grad!(Gx_vol::Array{T, 3}, Gy_vol::Array{T, 3}, Gz_vol::Array{T, 3}, fODF_vol::Array{T, 3}) where T <: AbstractFloat
 
-  fx = M[[2:end; end], :, :] - M
-  fy = M[:, [2:end; end], :] - M
-  fz = M[:, :, [2:end; end]] - M
-
-  return fx, fy, fz
+  @views Gx_vol .= fODF_vol[[2:end; end], :, :] .- fODF_vol
+  @views Gy_vol .= fODF_vol[:, [2:end; end], :] .- fODF_vol
+  @views Gz_vol .= fODF_vol[:, :, [2:end; end]] .- fODF_vol
 end
 
 
 """
     Divergence operator
 """
-function sd_div(Px::Array{T, 3}, Py::Array{T, 3}, Pz::Array{T, 3}) where T <: AbstractFloat
+function sd_div!(Div_vol::Array{T, 3}, Gx_vol::Array{T, 3}, Gy_vol::Array{T, 3}, Gz_vol::Array{T, 3}) where T <: AbstractFloat
 
-  fx = Px - Px[[1; 1:end-1], :, :]
-  fx[1,:,:]   =  Px[1,:,:]	# boundary
-  fx[end,:,:] = -Px[end-1,:,:]
+  @views Div_vol[2:end-1,:,:]  .=  Gx_vol[2:end-1,:,:] .- Gx_vol[1:end-2, :, :]
+  @views Div_vol[1,:,:]        .=  Gx_vol[1,:,:]	# boundaries
+  @views Div_vol[end,:,:]      .= -Gx_vol[end-1,:,:]
 
-  fy = Py - Py[:, [1; 1:end-1], :]
-  fy[:,1,:]   =  Py[:,1,:]	# boundary
-  fy[:,end,:] = -Py[:,end-1,:]
+  @views Div_vol[:,2:end-1,:] .+=  Gy_vol[:,2:end-1,:] .- Gy_vol[:, 1:end-2, :]
+  @views Div_vol[:,1,:]       .+=  Gy_vol[:,1,:]	# boundaries
+  @views Div_vol[:,end,:]     .+= -Gy_vol[:,end-1,:]
 
-  fz = Pz - Pz[:, :, [1; 1:end-1]]
-  fz[:,:,1]   =  Pz[:,:,1]	# boundary
-  fz[:,:,end] = -Pz[:,:,end-1]
-
-  return fx + fy + fz
+  @views Div_vol[:,:,2:end-1] .+=  Gz_vol[:,:,2:end-1] .- Gz_vol[:, :, 1:end-2]
+  @views Div_vol[:,:,1]       .+=  Gz_vol[:,:,1]	# boundaries
+  @views Div_vol[:,:,end]     .+= -Gz_vol[:,:,end-1]
 end
 
 
 """
-    Total variation regularization term
+    Total variation (TV) regularization term
+
+Read the fODF amplitudes for a single vertex from a 3D volume in the workspace
+and compute the TV regularization term in place, overwriting the volume
 """
-function rumba_tv(fodf_mat::Array{T, 3}, λ::T) where T <: AbstractFloat
-  # Compute gradient and divergence
-  Grad_x, Grad_y, Grad_z = sd_grad(fodf_mat)
+function rumba_tv!(W::RUMBAwork{T}, λ::T) where T <: AbstractFloat
+  # Compute spatial gradients
+  sd_grad!(W.Gx_vol, W.Gy_vol, W.Gz_vol, W.tv_vol)
 
-  d = sqrt.(Grad_x.^2 .+ Grad_y.^2 .+ Grad_z.^2 .+ eps(T))
+  # Normalize spatial gradients
+  W.tv_vol .= sqrt.(W.Gx_vol.^2 .+ W.Gy_vol.^2 .+ W.Gz_vol.^2 .+ eps(T))
+  W.Gx_vol ./= W.tv_vol
+  W.Gy_vol ./= W.tv_vol
+  W.Gz_vol ./= W.tv_vol
 
-  Div = sd_div(Grad_x ./ d, Grad_y ./ d, Grad_z ./ d)
+  # Compute divergence
+  sd_div!(W.Div_vol, W.Gx_vol, W.Gy_vol, W.Gz_vol)
 
-  # abs/eps to ensure values > 0
-  tv_mat = 1 ./ (abs.(1 .- λ .* Div) .+ eps(T))
-
-  return tv_mat
+  # Compute TV term (abs/eps to ensure values > 0)
+  W.tv_vol .= 1 ./ (abs.(1 .- λ .* W.Div_vol) .+ eps(T))
 end
 
 
@@ -144,91 +234,105 @@ function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::In
   ind_mask = findall(vec(mask) .> 0)
   nmask = length(ind_mask)
 
-  signal_mat = reshape(signal, nxyz, ndir)[ind_mask, :]
-  signal_mat = permutedims(signal_mat, [2 1])
+  signal_mat = reshape(signal, nxyz, ndir)[ind_mask, :]'
 
-  fodf_mat = repeat(fodf_0, 1, nmask)
+  ndir, ncomp = size(kernel)
 
-  dodf_mat = repeat(kernel * fodf_0, 1, nmask)
+  W = RUMBAwork(nmask, ndir, ncomp, use_tv ? (nx,ny,nz) : (0,0,0))
 
-  fzero = Float32(0)
-  λ_aux = zeros(Float32, nx, ny, nz)
+  # Initialize workspace
+  fill!(W.fodf_mat, 1)
+  W.fodf_mat .*= fodf_0
 
-  # --------------------------- Main algorithm --------------------------- #
+  fill!(W.dodf_mat, 1)
+  W.dodf_mat .*= (kernel * fodf_0)
+
   σ0 = Float32(1/15)
   λ = σ0^2
-  σ2_i = fill(λ, (1, nmask))
-  ε = 1f-7
+  fill!(W.σ2_vec, λ)
 
-  dodf_sig_mat = (signal_mat .* dodf_mat) ./ σ2_i
+  W.dodf_sig_mat .= (signal_mat .* W.dodf_mat) ./ W.σ2_vec
+
+  if use_tv
+    fill!(W.tv_vol, 0)
+  end
+  fill!(W.tv_mat, 1)
 
   snr_mean = snr_std = Float32(0)
 
-  Iratio = Array{Float32, 2}(undef, size(dodf_sig_mat))
-  if use_tv
-    fodf = zeros(Float32, nx, ny, nz)
-  end
-  tv_mat = ones(Float32, size(fodf_mat))
+  fzero = Float32(0)
+  ε = eps(Float32)
 
+  tmp_mat = Array{Float32, 2}(undef, ncomp, nmask)
+
+  # ------------------------------ Iterate ------------------------------- #
   @time for iter in 1:niter
     println("Iteration " * string(iter) * " of " * string(niter))
 
     # -------------------- R-L deconvolution term ------------------------ #
     # Ratio of modified Bessel functions of order n_order and n_order-1
-    Iratio .= besseli_ratio.(n_order, dodf_sig_mat)
+    W.Iratio .= besseli_ratio.(n_order, W.dodf_sig_mat)
 
-    rl_mat = (kernel' * (signal_mat .* Iratio)) ./
-             (kernel' * dodf_mat .+ eps(Float32))
+    mul!(W.rl_mat,  kernel', signal_mat .* W.Iratio)
+    mul!(tmp_mat, kernel', W.dodf_mat)
+    tmp_mat .+= ε
+    W.rl_mat ./= tmp_mat
 
     # -------------------- TV regularization term ------------------------ #
     @time if use_tv
-      for idir in 1:size(fodf_mat, 1)
-        # Embed in brain mask
-        fodf[ind_mask] = fodf_mat[idir, :]
+      for icomp in 1:ncomp
+        # Embed fODF amplitudes in brain mask
+        fill!(W.tv_vol, 0)
+        W.tv_vol[ind_mask] = W.fodf_mat[icomp, :]
 
-        tv = rumba_tv(fodf, λ)
-        tv_mat[idir, :] = tv[ind_mask]
+        # Compute TV term in place
+        rumba_tv!(W, λ)
+
+        # Extract TV term from brain mask
+        W.tv_mat[icomp, :] = W.tv_vol[ind_mask]
       end
     end
 
     # ------------------------- Update estimate -------------------------- #
-    fodf_mat .= max.(fodf_mat .* rl_mat .* tv_mat, fzero) # Enforce positivity
+    # Enforce positivity
+    W.fodf_mat .= max.(W.fodf_mat .* W.rl_mat .* W.tv_mat, fzero)
 
     if iter <= 100		&& false
       # Energy preservation at each step that included the bias on the s0 image
       # Only used to stabilize recovery in early iterations
-      cte = sqrt(1 + 2*n_order*mean(σ2_i))
-      cte = sqrt(1 + n_order*mean(σ2_i))
+      cte = sqrt(1 + 2*n_order*mean(W.σ2_vec))
+      cte = sqrt(1 + n_order*mean(W.σ2_vec))
       cte = 1
-      fodf_mat = cte * fodf_mat ./ (sum(fodf_mat, dims=1) .+ eps(Float32)) 
+      W.fodf_mat .= cte * W.fodf_mat ./ (sum(W.fodf_mat, dims=1) .+ ε)
     end
 
-    mul!(dodf_mat, kernel, fodf_mat)
-    dodf_sig_mat .= (signal_mat .* dodf_mat) ./ σ2_i
+    mul!(W.dodf_mat, kernel, W.fodf_mat)
+    W.dodf_sig_mat .= (signal_mat .* W.dodf_mat) ./ W.σ2_vec
 
     # --------------------- Noise variance estimate ---------------------- #
-    σ2_i = sum((signal_mat.^2 + dodf_mat.^2)/2 -
-               (σ2_i .* dodf_sig_mat) .* Iratio, dims=1) / (n_order * ndir)
+    W.σ2_vec .= sum((signal_mat.^2 + W.dodf_mat.^2)/2 -
+                (W.σ2_vec .* W.dodf_sig_mat) .* W.Iratio, dims=1) /
+                (n_order * ndir)
 
     # Assume that estimate of σ is in interval [1/snr_min, 1/snr_max],
     # where snr_min = 8 and snr_max = 80
-    σ2_i .= min.(Float32((1/8)^2), max.(σ2_i, Float32((1/80)^2)))
+    W.σ2_vec .= min.(Float32((1/8)^2), max.(W.σ2_vec, Float32((1/80)^2)))
 
-    snr_mean = mean(1 ./ sqrt.(σ2_i))
-    snr_std  =  std(1 ./ sqrt.(σ2_i))
+    snr_mean = mean(1 ./ sqrt.(W.σ2_vec))
+    snr_std  =  std(1 ./ sqrt.(W.σ2_vec))
 
     println("Estimated mean SNR (s0/σ) = " * string(snr_mean) *
             " (+-) " * string(snr_std))
 
     println("Number of coils = " * string(n_order))
 
-    println("Mean sum(fODF) = " * string(mean(sum(fodf_mat, dims=1))))
+    println("Mean sum(fODF) = " * string(mean(sum(W.fodf_mat, dims=1))))
 
     # ----------------- Update regularization parameter λ ----------------- #
     if use_tv
       if ipat_factor == 1
         # Penalize all voxels equally, assuming equal variance in all voxels
-        λ = mean(σ2_i)
+        λ = mean(W.σ2_vec)
                                  
         # For low levels of noise, enforce a minimum level of regularization
         λ = max(λ, Float32((1/30)^2))
@@ -237,16 +341,16 @@ function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::In
         # variance, e.g., tissue dependent or due to parallel imaging
         # (in the future, λ could be low-pass filtered for robust estimation)
         λ = zeros(Float32, [nx ny nz])
-        λ[ind_mask] = σ2_i
+        λ[ind_mask] = W.σ2_vec
       end
     end
   end
 
   # Energy preservation
-  fodf_mat ./= (sum(fodf_mat, dims=1) .+ eps(Float32))
+  W.fodf_mat ./= (sum(W.fodf_mat, dims=1) .+ ε)
 
-  noisevar = zeros(Float32, nx, ny, nz)
-  noisevar[ind_mask] = σ2_i
+  σ2 = zeros(Float32, nx, ny, nz)
+  σ2[ind_mask] = W.σ2_vec
   # ---------------------- End of main algorithm ------------------------- #
 
   # Embed ODFs into brain mask
@@ -255,19 +359,19 @@ function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::In
   # Volume fractions of anisotropic WM compartments
   fodf = zeros(Float32, nxyz, ncomp-2)
   for icomp in 1:ncomp-2
-    fodf[ind_mask, icomp] = fodf_mat[icomp, :]
+    fodf[ind_mask, icomp] = W.fodf_mat[icomp, :]
   end
   fodf = reshape(fodf, nx, ny, nz, ncomp-2)
 
   # Volume fraction of isotropic GM compartment
   fgm = zeros(Float32, nx, ny, nz)
-  fgm[ind_mask] = fodf_mat[ncomp, :]
+  fgm[ind_mask] = W.fodf_mat[ncomp, :]
 
   # Volume fraction of isotropic CSF compartment
   fcsf = zeros(Float32, nx, ny, nz)
-  fcsf[ind_mask] = fodf_mat[ncomp-1, :]
+  fcsf[ind_mask] = W.fodf_mat[ncomp-1, :]
 
-  return fodf, fgm, fcsf, noisevar, snr_mean, snr_std
+  return fodf, fgm, fcsf, σ2, snr_mean, snr_std
 end
 
 
