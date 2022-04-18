@@ -50,6 +50,7 @@ Pre-allocated workspace for RUMBA-SD reconstruction computations
 - `Gy_vol::Array{T,3}`
 - `Gz_vol::Array{T,3}`
 - `Div_vol::Array{T,3}`
+- `λ::Array{T,3}`
 - `σ2_vec::Matrix{T}`   : Noise variance by voxel
 """
 struct RUMBAwork{T}
@@ -68,6 +69,7 @@ struct RUMBAwork{T}
   Gy_vol::Array{T,3}
   Gz_vol::Array{T,3}
   Div_vol::Array{T,3}
+  λ::Array{T,3}
   σ2_vec::Matrix{T}
 
   function RUMBAwork(nmask::Int, ndir::Int, ncomp::Int,
@@ -91,6 +93,7 @@ struct RUMBAwork{T}
     Gy_vol       = Array{T,3}(undef, nvox)
     Gz_vol       = Array{T,3}(undef, nvox)
     Div_vol      = Array{T,3}(undef, nvox)
+    λ            = Array{T,3}(undef, nvox)
 
     # Noise variance by voxel
     σ2_vec       = Matrix{T}(undef, 1, nmask)
@@ -111,6 +114,7 @@ struct RUMBAwork{T}
       Gy_vol::Array{T,3},
       Gz_vol::Array{T,3},
       Div_vol::Array{T,3},
+      λ::Array{T,3},
       σ2_vec::Matrix{T}
     )
   end
@@ -200,7 +204,7 @@ end
 Read the fODF amplitudes for a single vertex from a 3D volume in the workspace
 and compute the TV regularization term in place, overwriting the volume
 """
-function rumba_tv!(W::RUMBAwork{T}, λ::T) where T <: AbstractFloat
+function rumba_tv!(W::RUMBAwork{T}) where T <: AbstractFloat
   # Compute spatial gradients
   sd_grad!(W.Gx_vol, W.Gy_vol, W.Gz_vol, W.tv_vol)
 
@@ -214,7 +218,28 @@ function rumba_tv!(W::RUMBAwork{T}, λ::T) where T <: AbstractFloat
   sd_div!(W.Div_vol, W.Gx_vol, W.Gy_vol, W.Gz_vol)
 
   # Compute TV term (abs/eps to ensure values > 0)
-  W.tv_vol .= 1 ./ (abs.(1 .- λ .* W.Div_vol) .+ eps(T))
+  W.tv_vol .= 1 ./ (abs.(1 .- W.λ .* W.Div_vol) .+ eps(T))
+end
+
+
+"""
+Initialize RUMBA-SD estimates
+"""
+function rumba_sd_initialize!(W::RUMBAwork{T}, fodf_0::Vector{T}, kernel::Matrix{T}, signal_mat::AbstractArray{T}, λ::T) where T <: AbstractFloat
+
+  fill!(W.fodf_mat, 1)
+  W.fodf_mat .*= fodf_0
+
+  fill!(W.dodf_mat, 1)
+  W.dodf_mat .*= (kernel * fodf_0)
+
+  fill!(W.λ, λ)
+  fill!(W.σ2_vec, λ)
+
+  W.dodf_sig_mat .= (signal_mat .* W.dodf_mat) ./ W.σ2_vec
+
+  fill!(W.tv_vol, 0)
+  fill!(W.tv_mat, 1)
 end
 
 
@@ -226,152 +251,85 @@ end
     snr_mean: Estimated mean snr
     snr_std:  Estimated SNR standard deviation
 """
-function rumba_sd_iterate(signal::Array, kernel::Array, fodf_0::Array, niter::Integer, mask::Array, n_order::Integer, coil_combine::String, ipat_factor::Integer, use_tv::Bool)
-
-  (nx, ny, nz, ndir) = size(signal)
-  nxyz = nx * ny * nz
-
-  ind_mask = findall(vec(mask) .> 0)
-  nmask = length(ind_mask)
-
-  signal_mat = reshape(signal, nxyz, ndir)[ind_mask, :]'
-
-  ndir, ncomp = size(kernel)
-
-  W = RUMBAwork(nmask, ndir, ncomp, use_tv ? (nx,ny,nz) : (0,0,0))
-
-  # Initialize workspace
-  fill!(W.fodf_mat, 1)
-  W.fodf_mat .*= fodf_0
-
-  fill!(W.dodf_mat, 1)
-  W.dodf_mat .*= (kernel * fodf_0)
-
-  σ0 = Float32(1/15)
-  λ = σ0^2
-  fill!(W.σ2_vec, λ)
-
-  W.dodf_sig_mat .= (signal_mat .* W.dodf_mat) ./ W.σ2_vec
-
-  if use_tv
-    fill!(W.tv_vol, 0)
-  end
-  fill!(W.tv_mat, 1)
-
-  snr_mean = snr_std = Float32(0)
+function rumba_sd_iterate!(W::RUMBAwork{T}, signal_mat::AbstractArray{T}, kernel::Array, ind_mask::Vector{Int}, iter::Int, n_order::Integer, coil_combine::String, ipat_factor::Integer, use_tv::Bool) where T <: AbstractFloat
 
   fzero = Float32(0)
   ε = eps(Float32)
 
-  tmp_mat = Array{Float32, 2}(undef, ncomp, nmask)
+  ndir, ncomp = size(kernel)
 
-  # ------------------------------ Iterate ------------------------------- #
-  @time for iter in 1:niter
-    println("Iteration " * string(iter) * " of " * string(niter))
+  # -------------------- R-L deconvolution term ------------------------ #
+  # Ratio of modified Bessel functions of order n_order and n_order-1
+  W.Iratio .= besseli_ratio.(n_order, W.dodf_sig_mat)
 
-    # -------------------- R-L deconvolution term ------------------------ #
-    # Ratio of modified Bessel functions of order n_order and n_order-1
-    W.Iratio .= besseli_ratio.(n_order, W.dodf_sig_mat)
+  mul!(W.rl_mat,  kernel', signal_mat .* W.Iratio)
+  W.rl_mat ./= (kernel' * W.dodf_mat .+= ε)
 
-    mul!(W.rl_mat,  kernel', signal_mat .* W.Iratio)
-    mul!(tmp_mat, kernel', W.dodf_mat)
-    tmp_mat .+= ε
-    W.rl_mat ./= tmp_mat
+  # -------------------- TV regularization term ------------------------ #
+  @time if use_tv
+    for icomp in 1:ncomp
+      # Embed fODF amplitudes in brain mask
+      fill!(W.tv_vol, 0)
+      W.tv_vol[ind_mask] = W.fodf_mat[icomp, :]
 
-    # -------------------- TV regularization term ------------------------ #
-    @time if use_tv
-      for icomp in 1:ncomp
-        # Embed fODF amplitudes in brain mask
-        fill!(W.tv_vol, 0)
-        W.tv_vol[ind_mask] = W.fodf_mat[icomp, :]
+      # Compute TV term in place
+      rumba_tv!(W)
 
-        # Compute TV term in place
-        rumba_tv!(W, λ)
-
-        # Extract TV term from brain mask
-        W.tv_mat[icomp, :] = W.tv_vol[ind_mask]
-      end
-    end
-
-    # ------------------------- Update estimate -------------------------- #
-    # Enforce positivity
-    W.fodf_mat .= max.(W.fodf_mat .* W.rl_mat .* W.tv_mat, fzero)
-
-    if iter <= 100		&& false
-      # Energy preservation at each step that included the bias on the s0 image
-      # Only used to stabilize recovery in early iterations
-      cte = sqrt(1 + 2*n_order*mean(W.σ2_vec))
-      cte = sqrt(1 + n_order*mean(W.σ2_vec))
-      cte = 1
-      W.fodf_mat .= cte * W.fodf_mat ./ (sum(W.fodf_mat, dims=1) .+ ε)
-    end
-
-    mul!(W.dodf_mat, kernel, W.fodf_mat)
-    W.dodf_sig_mat .= (signal_mat .* W.dodf_mat) ./ W.σ2_vec
-
-    # --------------------- Noise variance estimate ---------------------- #
-    W.σ2_vec .= sum((signal_mat.^2 + W.dodf_mat.^2)/2 -
-                (W.σ2_vec .* W.dodf_sig_mat) .* W.Iratio, dims=1) /
-                (n_order * ndir)
-
-    # Assume that estimate of σ is in interval [1/snr_min, 1/snr_max],
-    # where snr_min = 8 and snr_max = 80
-    W.σ2_vec .= min.(Float32((1/8)^2), max.(W.σ2_vec, Float32((1/80)^2)))
-
-    snr_mean = mean(1 ./ sqrt.(W.σ2_vec))
-    snr_std  =  std(1 ./ sqrt.(W.σ2_vec))
-
-    println("Estimated mean SNR (s0/σ) = " * string(snr_mean) *
-            " (+-) " * string(snr_std))
-
-    println("Number of coils = " * string(n_order))
-
-    println("Mean sum(fODF) = " * string(mean(sum(W.fodf_mat, dims=1))))
-
-    # ----------------- Update regularization parameter λ ----------------- #
-    if use_tv
-      if ipat_factor == 1
-        # Penalize all voxels equally, assuming equal variance in all voxels
-        λ = mean(W.σ2_vec)
-                                 
-        # For low levels of noise, enforce a minimum level of regularization
-        λ = max(λ, Float32((1/30)^2))
-      elseif ipat_factor > 1
-        # Adaptive spatial regularization, assuming spatially inhomogeneous
-        # variance, e.g., tissue dependent or due to parallel imaging
-        # (in the future, λ could be low-pass filtered for robust estimation)
-        λ = zeros(Float32, [nx ny nz])
-        λ[ind_mask] = W.σ2_vec
-      end
+      # Extract TV term from brain mask
+      W.tv_mat[icomp, :] = W.tv_vol[ind_mask]
     end
   end
 
-  # Energy preservation
-  W.fodf_mat ./= (sum(W.fodf_mat, dims=1) .+ ε)
+  # ------------------------- Update estimate -------------------------- #
+  # Enforce positivity
+  W.fodf_mat .= max.(W.fodf_mat .* W.rl_mat .* W.tv_mat, fzero)
 
-  σ2 = zeros(Float32, nx, ny, nz)
-  σ2[ind_mask] = W.σ2_vec
-  # ---------------------- End of main algorithm ------------------------- #
-
-  # Embed ODFs into brain mask
-  ncomp = length(fodf_0)
-
-  # Volume fractions of anisotropic WM compartments
-  fodf = zeros(Float32, nxyz, ncomp-2)
-  for icomp in 1:ncomp-2
-    fodf[ind_mask, icomp] = W.fodf_mat[icomp, :]
+  if iter <= 100		&& false
+    # Energy preservation at each step that included the bias on the s0 image
+    # Only used to stabilize recovery in early iterations
+    cte = sqrt(1 + 2*n_order*mean(W.σ2_vec))
+    cte = sqrt(1 + n_order*mean(W.σ2_vec))
+    cte = 1
+    W.fodf_mat .= cte * W.fodf_mat ./ (sum(W.fodf_mat, dims=1) .+ ε)
   end
-  fodf = reshape(fodf, nx, ny, nz, ncomp-2)
 
-  # Volume fraction of isotropic GM compartment
-  fgm = zeros(Float32, nx, ny, nz)
-  fgm[ind_mask] = W.fodf_mat[ncomp, :]
+  mul!(W.dodf_mat, kernel, W.fodf_mat)
+  W.dodf_sig_mat .= (signal_mat .* W.dodf_mat) ./ W.σ2_vec
 
-  # Volume fraction of isotropic CSF compartment
-  fcsf = zeros(Float32, nx, ny, nz)
-  fcsf[ind_mask] = W.fodf_mat[ncomp-1, :]
+  # --------------------- Noise variance estimate ---------------------- #
+  W.σ2_vec .= sum((signal_mat.^2 + W.dodf_mat.^2)/2 -
+              (W.σ2_vec .* W.dodf_sig_mat) .* W.Iratio, dims=1) /
+              (n_order * ndir)
 
-  return fodf, fgm, fcsf, σ2, snr_mean, snr_std
+  # Assume that estimate of σ is in interval [1/snr_min, 1/snr_max],
+  # where snr_min = 8 and snr_max = 80
+  W.σ2_vec .= min.(Float32((1/8)^2), max.(W.σ2_vec, Float32((1/80)^2)))
+
+  snr_mean = mean(1 ./ sqrt.(W.σ2_vec))
+  snr_std  =  std(1 ./ sqrt.(W.σ2_vec))
+
+  println("Estimated mean SNR (s0/σ) = " * string(snr_mean) *
+          " (+-) " * string(snr_std))
+
+  println("Number of coils = " * string(n_order))
+
+  println("Mean sum(fODF) = " * string(mean(sum(W.fodf_mat, dims=1))))
+
+  # ----------------- Update regularization parameter λ ----------------- #
+  if use_tv
+    if ipat_factor == 1
+      # Penalize all voxels equally, assuming equal variance in all voxels
+      # For low levels of noise, enforce a minimum level of regularization
+      fill!(W.λ, max(mean(W.σ2_vec), Float32((1/30)^2)))
+                               
+    elseif ipat_factor > 1
+      # Adaptive spatial regularization, assuming spatially inhomogeneous
+      # variance, e.g., tissue dependent or due to parallel imaging
+      # (in the future, λ could be low-pass filtered for robust estimation)
+      fill!(W.λ, 0)
+      W.λ[ind_mask] = W.σ2_vec
+    end
+  end
 end
 
 
@@ -505,23 +463,23 @@ function rumba_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_724, niter::Integer
 
   # Rearrange signals so that average low-b volume is first, followed by DWIs,
   # and divide by average low-b volume
-  E = copy(dwi.vol)
-  E[E .< 0] .= eps(Float32)
+  signal = copy(dwi.vol)
+  signal[signal .< 0] .= eps(Float32)
 
   ib0 = (dwi.bval .== minimum(dwi.bval))
 
-  s0 = mean(E[:, :, :, ib0], dims=4)
-  E = E[:, :, :, .!ib0] ./ s0
-  E[isnan.(E)] .= 0
-  E = cat(Float32.(s0 .> 0), E, dims=4)		# E=1 when b=0
-  E[E .> 1] .= 1
+  s0 = mean(signal[:, :, :, ib0], dims=4)
+  signal = signal[:, :, :, .!ib0] ./ s0
+  signal[isnan.(signal)] .= 0
+  signal = cat(Float32.(s0 .> 0), signal, dims=4)	# signal=1 when b=0
+  signal[signal .> 1] .= 1
 
   # Normalize gradient vectors 
   g = vcat([0 0 0], dwi.bvec[.!ib0, :] ./
                     sqrt.(sum(dwi.bvec[.!ib0, :].^2, dims=2)))
   b = vec(vcat([0], dwi.bval[.!ib0, :]))
 
-  (nx, ny, nz, ndir) = size(E)
+  (nx, ny, nz, ndir) = size(signal)
 
   # Vertices and faces on the sphere where the fODF will be sampled
   nvert = size(odf_dirs.vertices, 1)
@@ -582,33 +540,74 @@ function rumba_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_724, niter::Integer
 					### TODO: Do half Kernel above?
 					###
 
-  fodf  = MRI(mask, nvert, Float32)
-  fcsf  = MRI(mask, 1, Float32)
-  fgm   = MRI(mask, 1, Float32)
-  var   = MRI(mask, 1, Float32)
+  # Extract diffusion signal from brain mask
+  (nx, ny, nz, ndir) = size(signal)
+  nxyz = nx * ny * nz
+
+  ind_mask = findall(vec(mask.vol) .> 0)
+  nmask = length(ind_mask)
+
+  signal_mat = reshape(signal, nxyz, ndir)[ind_mask, :]'
+
+  # Allocate workspace
+  ndir, ncomp = size(Kernel0)
+
+  W = RUMBAwork(nmask, ndir, ncomp, use_tv ? (nx,ny,nz) : (0,0,0))
+
+  # Initialize estimates
+  σ0 = Float32(1/15)
+  λ0 = σ0^2
+  snr_mean = snr_std = Float32(0)
+
+  rumba_sd_initialize!(W, fodf_00, Kernel0, signal_mat, λ0)
 
   #
   # Reconstruct fODFs
   #
-  (fodf.vol, fgm.vol, fcsf.vol, var.vol, snr_mean, snr_std) =
-    rumba_sd_iterate(E, Kernel0, fodf_00, niter, mask.vol,
-                     n_order, coil_combine, ipat_factor, use_tv)
+  @time for iter in 1:niter
+    println("Iteration " * string(iter) * " of " * string(niter))
+
+    rumba_sd_iterate!(W, signal_mat, Kernel0, ind_mask, iter,
+                      n_order, coil_combine, ipat_factor, use_tv)
+  end
+
+  # Energy preservation
+  W.fodf_mat ./= (sum(W.fodf_mat, dims=1) .+ eps(Float32))
+
+  #
+  # Embed estimates in brain mask
+  #
+  fodf = MRI(mask, nvert, Float32)
+  fcsf = MRI(mask, 1, Float32)
+  fgm  = MRI(mask, 1, Float32)
+  var  = MRI(mask, 1, Float32)
+  gfa  = MRI(mask, 1, Float32)
+
+  # Volume fractions of anisotropic WM compartments
+  for icomp in 1:ncomp-2
+    fodf.vol[ind_mask .+ (icomp-1)*nxyz] = W.fodf_mat[icomp, :]
+  end
+
+  # Volume fraction of isotropic GM compartment
+  fgm.vol[ind_mask] = W.fodf_mat[ncomp, :]
+
+  # Volume fraction of isotropic CSF compartment
+  fcsf.vol[ind_mask] = W.fodf_mat[ncomp-1, :]
 
   f_iso = fgm.vol + fcsf.vol
 
-  #
   # Add isotropic components to ODF and normalize to sum=1
-  #
   fodf.vol .= fodf.vol .+ f_iso
 
   fodf.vol .= fodf.vol ./ sum(fodf.vol, dims=4)
   fodf.vol[isnan.(fodf.vol)] .= 0;
 
+  # Noise variance
+  var.vol[ind_mask] = W.σ2_vec
+
   #
   # Compute GFA
   #
-  gfa = MRI(mask, 1, Float32)
-
 #### TODO: Can provide a pre-computed mean to std -> fill(1/size(fodf.vol,4))
   gfa.vol .= std(fodf.vol, dims=4) ./ sqrt.(mean(fodf.vol.^2, dims=4))
   gfa.vol[isnan.(gfa.vol)] .= 0
