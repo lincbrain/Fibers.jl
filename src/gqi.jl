@@ -159,9 +159,9 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
 
         nvalid = find_peaks!(W)
 
-        for ipeak in 1:npeak
-          ipeak > nvalid && continue
+        n = min(nvalid, npeak)
 
+        for ipeak in 1:n
           peak[ipeak].vol[ix, iy, iz, :] = odf_dirs.vertices[W.isort[ipeak], :]
           qa[ipeak].vol[ix, iy, iz]      = odf.vol[ix, iy, iz, W.isort[ipeak]] -
                                            odfmin
@@ -186,12 +186,12 @@ Find the vertices whose amplitudes are local peaks and return them sorted
 """
 function find_peaks!(W::GQIwork)
   W.odf_peak .= W.o
-  W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,1]] .||
-                     W.o[W.faces[:,3]] .>= W.o[W.faces[:,1]], 1]] .= 0
-  W.odf_peak[W.faces[W.o[W.faces[:,1]] .>= W.o[W.faces[:,2]] .||
-                     W.o[W.faces[:,3]] .>= W.o[W.faces[:,2]], 2]] .= 0
-  W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,3]] .||
-                     W.o[W.faces[:,1]] .>= W.o[W.faces[:,3]], 3]] .= 0
+  @views W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,1]] .||
+                            W.o[W.faces[:,3]] .>= W.o[W.faces[:,1]], 1]] .= 0
+  @views W.odf_peak[W.faces[W.o[W.faces[:,1]] .>= W.o[W.faces[:,2]] .||
+                            W.o[W.faces[:,3]] .>= W.o[W.faces[:,2]], 2]] .= 0
+  @views W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,3]] .||
+                            W.o[W.faces[:,1]] .>= W.o[W.faces[:,3]], 3]] .= 0
 
   sortperm!(W.isort, W.odf_peak, rev=true)
 
