@@ -37,24 +37,23 @@ end
 
 Pre-allocated workspace for ADC fit computations
 
-- `T::DataType`        : Data type for computations (default: `Float32`)
-- `nvol::Int`          : Number of volumes in DWI series
-- `ib0::Vector{Bool}`  : Indicator for b=0 volumes [`nvol`]
-- `ipos::Vector{Bool}` : Indicator for volumes with positive DWI signal [`nvol`]
-- `logs::Vector{T}`    : Logarithm of DWI signal [`nvol`]
-- `d::Vector{T}`       : Linear system solution vector [2]
-- `A::Matrix{T}`       : System matrix [nvol x 2]
-- `pA::Matrix{T}`      : Pseudo-inverse of system matrix [2 x nvol]
+- `T::DataType`                : Data type for computations (default: `Float32`)
+- `nvol::Int`                  : Number of volumes in DWI series
+- `ib0::Vector{Bool}`          : Indicator for b=0 volumes [`nvol`]
+- `ipos::Vector{Vector{Bool}}` : Indicator for volumes with positive DWI signal [`nvol`]
+- `logs::Vector{Vector{T}}`    : Logarithm of DWI signal [`nvol`]
+- `d::Vector{Vector{T}}`       : Linear system solution vector [2]
+- `A::Matrix{T}`               : System matrix [nvol x 2]
+- `pA::Matrix{T}`              : Pseudo-inverse of system matrix [2 x nvol]
 """
 struct ADCwork{T}
   nvol::Int
   ib0::Vector{Bool}
-  ipos::Vector{Bool}
-  logs::Vector{T}
-  d::Vector{T}
+  ipos::Vector{Vector{Bool}}
+  logs::Vector{Vector{T}}
+  d::Vector{Vector{T}}
   A::Matrix{T}
   pA::Matrix{T}
-  D::Matrix{T}
 
   function ADCwork(bval::Vector{Float32}, T::DataType=Float32)
 
@@ -65,7 +64,13 @@ struct ADCwork{T}
     ib0  = (bval .== minimum(bval))
 
     # Indicator for volumes with positive DWI signal
-    ipos = Vector{Bool}(undef, nvol)
+    ipos = [Vector{Bool}(undef, nvol) for tid in 1:Threads.nthreads()]
+
+    # Log of DWI signal
+    logs = [Vector{T}(undef, nvol) for tid in 1:Threads.nthreads()]
+
+    # Linear system solution vector
+    d    = [Vector{T}(undef, 2) for tid in 1:Threads.nthreads()]
 
     # System matrix
     A = Matrix{T}(undef, nvol, 2)
@@ -75,12 +80,6 @@ struct ADCwork{T}
 
     # Pseudo-inverse of system matrix
     pA = pinv(A)
-
-    # Log of DWI signal
-    logs = Vector{T}(undef, nvol)
-
-    # Linear system solution vector
-    d = Vector{T}(undef, 2)
 
     new{T}(
       nvol,
@@ -100,25 +99,25 @@ end
 
 Pre-allocated workspace for DTI fit computations
 
-- `T::DataType`        : Data type for computations (default: `Float32`)
-- `nvol::Int`          : Number of volumes in DWI series
-- `ib0::Vector{Bool}`  : Indicator for b=0 volumes [`nvol`]
-- `ipos::Vector{Bool}` : Indicator for volumes with positive DWI signal [`nvol`]
-- `logs::Vector{T}`    : Logarithm of DWI signal [`nvol`]
-- `d::Vector{T}`       : Linear system solution vector [7]
-- `A::Matrix{T}`       : System matrix [nvol x 7]
-- `pA::Matrix{T}`      : Pseudo-inverse of system matrix [7 x nvol]
-- `D::Matrix{T}`       : Diffusion tensor [3 x 3]
+- `T::DataType`                : Data type for computations (default: `Float32`)
+- `nvol::Int`                  : Number of volumes in DWI series
+- `ib0::Vector{Bool}`          : Indicator for b=0 volumes [`nvol`]
+- `ipos::Vector{Vector{Bool}}` : Indicator for volumes with positive DWI signal [`nvol`]
+- `logs::Vector{Vector{T}}`    : Logarithm of DWI signal [`nvol`]
+- `d::Vector{Vector{T}}`       : Linear system solution vector [7]
+- `A::Matrix{T}`               : System matrix [nvol x 7]
+- `pA::Matrix{T}`              : Pseudo-inverse of system matrix [7 x nvol]
+- `D::Vector{Matrix{T}}`       : Diffusion tensor [3 x 3]
 """
 struct DTIwork{T}
   nvol::Int
   ib0::Vector{Bool}
-  ipos::Vector{Bool}
-  logs::Vector{T}
-  d::Vector{T}
+  ipos::Vector{Vector{Bool}}
+  logs::Vector{Vector{T}}
+  d::Vector{Vector{T}}
   A::Matrix{T}
   pA::Matrix{T}
-  D::Matrix{T}
+  D::Vector{Matrix{T}}
 
   function DTIwork(bval::Vector{Float32},
                    bvec::Matrix{Float32}, T::DataType=Float32)
@@ -130,7 +129,13 @@ struct DTIwork{T}
     ib0  = (bval .== minimum(bval))
 
     # Indicator for volumes with positive DWI signal
-    ipos = Vector{Bool}(undef, nvol)
+    ipos = [Vector{Bool}(undef, nvol) for tid in 1:Threads.nthreads()]
+
+    # Log of DWI signal
+    logs = [Vector{T}(undef, nvol) for tid in 1:Threads.nthreads()]
+
+    # Linear system solution vector
+    d    = [Vector{T}(undef, 7) for tid in 1:Threads.nthreads()]
 
     # System matrix
     A = Matrix{T}(undef, nvol, 7)
@@ -149,14 +154,8 @@ struct DTIwork{T}
     # Pseudo-inverse of system matrix
     pA = pinv(A)
 
-    # Log of DWI signal
-    logs = Vector{T}(undef, nvol)
-
-    # Linear system solution vector
-    d = Vector{T}(undef, 7)
-
     # Diffusion tensor
-    D = Matrix{T}(undef, 3, 3)
+    D = [Matrix{T}(undef, 3, 3) for tid in 1:Threads.nthreads()]
 
     new{T}(
       nvol,
@@ -211,20 +210,22 @@ Fit the ADC for a single voxel
 """
 function adc_fit(dwi::Vector{T}, W::ADCwork{T}) where T<:AbstractFloat
 
+  tid = Threads.threadid()
+
   # Only use positive DWI values to fit the model
-  W.ipos .= dwi .> 0
-  npos = sum(W.ipos)
+  W.ipos[tid] .= dwi .> 0
+  npos = sum(W.ipos[tid])
 
   if npos == W.nvol
-    W.logs .= log.(dwi)
-    mul!(W.d, W.pA, W.logs)
-  elseif npos > 6 && any(W.ipos[W.ib0])
-    mul!(W.d, pinv(W.A[W.ipos, :]), log.(dwi[W.ipos]))
+    W.logs[tid] .= log.(dwi)
+    mul!(W.d[tid], W.pA, W.logs[tid])
+  elseif npos > 6 && any(W.ipos[tid][W.ib0])
+    mul!(W.d[tid], pinv(W.A[W.ipos[tid], :]), log.(dwi[W.ipos[tid]]))
   else
     return zero(T), zero(T)
   end
 
-  return W.d[1], exp(W.d[2])
+  return W.d[tid][1], exp(W.d[tid][2])
 end
 
 
@@ -300,31 +301,33 @@ Perform least-squares fitting of tensor for a single voxel
 """
 function dti_fit_ls(dwi::Vector{T}, W::DTIwork{T}) where T<:AbstractFloat
 
+  tid = Threads.threadid()
+
   # Only use positive DWI values to fit the model
-  W.ipos .= dwi .> 0
-  npos = sum(W.ipos)
+  W.ipos[tid] .= dwi .> 0
+  npos = sum(W.ipos[tid])
 
   if npos == W.nvol
-    W.logs .= log.(dwi)
-    mul!(W.d, W.pA, W.logs)
-  elseif npos > 6 && any(W.ipos[W.ib0])
-    mul!(W.d, pinv(W.A[W.ipos, :]), log.(dwi[W.ipos]))
+    W.logs[tid] .= log.(dwi)
+    mul!(W.d[tid], W.pA, W.logs[tid])
+  elseif npos > 6 && any(W.ipos[tid][W.ib0])
+    mul!(W.d[tid], pinv(W.A[W.ipos[tid], :]), log.(dwi[W.ipos[tid]]))
   else
     return zero(T), zero(T), zero(T), zero(T), 
                     zeros(T, 3), zeros(T, 3), zeros(T, 3),
                     zero(T), zero(T), zero(T)
   end
 
-  s0 = exp(W.d[7])
+  s0 = exp(W.d[tid][7])
 
-  W.D[1] = W.d[1]
-  W.D[2] = W.d[2]
-  W.D[3] = W.d[3]
-  W.D[5] = W.d[4]
-  W.D[6] = W.d[5]
-  W.D[9] = W.d[6]
+  W.D[tid][1] = W.d[tid][1]
+  W.D[tid][2] = W.d[tid][2]
+  W.D[tid][3] = W.d[tid][3]
+  W.D[tid][5] = W.d[tid][4]
+  W.D[tid][6] = W.d[tid][5]
+  W.D[tid][9] = W.d[tid][6]
 
-  E = eigen!(Symmetric(W.D, :L))
+  E = eigen!(Symmetric(W.D[tid], :L))
 
   return s0, E.values[3], E.values[2], E.values[1],
              E.vectors[:, 3], E.vectors[:, 2], E.vectors[:, 1],

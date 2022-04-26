@@ -29,45 +29,45 @@ end
 
 Pre-allocated workspace for GQI reconstruction computations
 
-- `T::DataType`         : Data type for computations (default: `Float32`)
-- `nvol::Int`           : Number of volumes in DWI series
-- `nvert::Int`          : Number of ODF vertices (on the half sphere)
-- `isort::Vector{Int}`  : Indices of ODF peak vertices (sorted) [`nvert`]
-- `s::Vector{T}`        : DWI signal [`nvol`]
-- `o::Vector{T}`        : ODF amplitudes [`nvert`]
-- `odf_peak::Vector{T}` : ODF amplitudes at local peaks [`nvert`]
-- `faces::Matrix{Int}`  : ODF faces (on the half sphere) [nvert x 3]
-- `A::Matrix{T}`        : System matrix [nvert x nvol]
+- `T::DataType`                : Data type for computations (default: `Float32`)
+- `nvol::Int`                  : Number of volumes in DWI series
+- `nvert::Int`                 : Number of ODF vertices (on the half sphere)
+- `isort::Vector{Vector{Int}}` : Indices of ODF peak vertices (sorted) [`nvert`]
+- `s::Vector{Vector{T}}`       : DWI signal [`nvol`]
+- `o::Vector{Vector{T}}`       : ODF amplitudes [`nvert`]
+- `odf_peak::Vector{Vector{T}}`: ODF amplitudes at local peaks [`nvert`]
+- `faces::Matrix{Int}`         : ODF faces (on the half sphere) [nvert x 3]
+- `A::Matrix{T}`               : System matrix [nvert x nvol]
 """
 struct GQIwork{T}
   nvol::Int
   nvert::Int
-  isort::Vector{Int}
-  s::Vector{T}
-  o::Vector{T}
-  odf_peak::Vector{T}
+  isort::Vector{Vector{Int}}
+  s::Vector{Vector{T}}
+  o::Vector{Vector{T}}
+  odf_peak::Vector{Vector{T}}
   faces::Matrix{Int}
   A::Matrix{T}
 
   function GQIwork(bval::Vector{Float32}, bvec::Matrix{Float32}, odf_dirs::ODF=sphere_642, σ::Float32=Float32(1.25), T::DataType=Float32)
 
     # Number of volumes in DWI series
-    nvol = length(bval)
+    nvol     = length(bval)
 
     # Number of ODF vertices (on the half sphere)
-    nvert = div(size(odf_dirs.vertices, 1), 2)
+    nvert    = div(size(odf_dirs.vertices, 1), 2)
 
     # Indices of sorted ODF peaks
-    isort = Vector{Int}(undef, nvert)
+    isort    = [Vector{Int}(undef, nvert) for tid in 1:Threads.nthreads()]
 
     # DWI signal
-    s = Vector{T}(undef, nvol)
+    s        = [Vector{T}(undef, nvol) for tid in 1:Threads.nthreads()]
 
     # ODF amplitudes
-    o = Vector{T}(undef, nvert)
+    o        = [Vector{T}(undef, nvert) for tid in 1:Threads.nthreads()]
 
     # ODF amplitudes at local peaks
-    odf_peak = Vector{T}(undef, nvert)
+    odf_peak = [Vector{T}(undef, nvert) for tid in 1:Threads.nthreads()]
 
     # ODF faces (on the half sphere)
     faces = copy(odf_dirs.faces)
@@ -139,36 +139,39 @@ function gqi_rec(dwi::MRI, mask::MRI, odf_dirs::ODF=sphere_642, σ::Float32=Floa
     qa[ipeak]   = MRI(mask, 1, Float32)
   end
 
-  odfmax = 0
-
   Threads.@threads for iz in 1:size(dwi.vol, 3)
     for iy in 1:size(dwi.vol, 2)
       for ix in 1:size(dwi.vol, 1)
         mask.vol[ix, iy, iz] == 0 && continue
 
-        W.s .= dwi.vol[ix, iy, iz, :]
-        W.s[W.s .< 0] .= 0
+        tid = Threads.threadid()
 
-        maximum(W.s) == 0 && continue
+        W.s[tid] .= dwi.vol[ix, iy, iz, :]
+        W.s[tid][W.s[tid] .< 0] .= 0
 
-        mul!(W.o, W.A, W.s)
-        odf.vol[ix, iy, iz, :] = W.o
+        maximum(W.s[tid]) == 0 && continue
 
-        odfmax = max.(odfmax, mean(W.o))
-        odfmin = minimum(W.o)
+        mul!(W.o[tid], W.A, W.s[tid])
+        odf.vol[ix, iy, iz, :] = W.o[tid]
+
+        odfmin = minimum(W.o[tid])
 
         nvalid = find_peaks!(W)
 
         n = min(nvalid, npeak)
 
         for ipeak in 1:n
-          peak[ipeak].vol[ix, iy, iz, :] = odf_dirs.vertices[W.isort[ipeak], :]
-          qa[ipeak].vol[ix, iy, iz]      = odf.vol[ix, iy, iz, W.isort[ipeak]] -
-                                           odfmin
+          peak[ipeak].vol[ix, iy, iz, :] =
+            odf_dirs.vertices[W.isort[tid][ipeak], :]
+
+          qa[ipeak].vol[ix, iy, iz] =
+            odf.vol[ix, iy, iz, W.isort[tid][ipeak]] - odfmin
         end
       end
     end
   end
+
+  odfmax = maximum(mean(odf.vol, dims=4))
 
   for ipeak in 1:npeak
     qa[ipeak].vol /= odfmax
@@ -185,17 +188,26 @@ Find the vertices whose amplitudes are local peaks and return them sorted
 (assume that ODF amplitudes have been computed)
 """
 function find_peaks!(W::GQIwork)
-  W.odf_peak .= W.o
-  @views W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,1]] .||
-                            W.o[W.faces[:,3]] .>= W.o[W.faces[:,1]], 1]] .= 0
-  @views W.odf_peak[W.faces[W.o[W.faces[:,1]] .>= W.o[W.faces[:,2]] .||
-                            W.o[W.faces[:,3]] .>= W.o[W.faces[:,2]], 2]] .= 0
-  @views W.odf_peak[W.faces[W.o[W.faces[:,2]] .>= W.o[W.faces[:,3]] .||
-                            W.o[W.faces[:,1]] .>= W.o[W.faces[:,3]], 3]] .= 0
 
-  sortperm!(W.isort, W.odf_peak, rev=true)
+  tid = Threads.threadid()
 
-  return length(findall(W.odf_peak .> 0))
+  W.odf_peak[tid] .= W.o[tid]
+  @views W.odf_peak[tid][W.faces[W.o[tid][W.faces[:,2]] .>=
+                                 W.o[tid][W.faces[:,1]] .||
+                                 W.o[tid][W.faces[:,3]] .>=
+                                 W.o[tid][W.faces[:,1]], 1]] .= 0
+  @views W.odf_peak[tid][W.faces[W.o[tid][W.faces[:,1]] .>= 
+                                 W.o[tid][W.faces[:,2]] .||
+                                 W.o[tid][W.faces[:,3]] .>=
+                                 W.o[tid][W.faces[:,2]], 2]] .= 0
+  @views W.odf_peak[tid][W.faces[W.o[tid][W.faces[:,2]] .>=
+                                 W.o[tid][W.faces[:,3]] .||
+                                 W.o[tid][W.faces[:,1]] .>=
+                                 W.o[tid][W.faces[:,3]], 3]] .= 0
+
+  sortperm!(W.isort[tid], W.odf_peak[tid], rev=true)
+
+  return length(findall(W.odf_peak[tid] .> 0))
 end
 
 
