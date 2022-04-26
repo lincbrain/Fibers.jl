@@ -2,7 +2,7 @@
 
 ### Import this package
 
-Start julia, e.g.,  with ```julia --thread 10```, if you have 10 cores on your computer and you want julia to use them for multi-threading.
+If you want julia (and this package) to use multi-threading for faster computation, you have to explicitly tell it to. You can do that either by starting julia  with ```julia --thread auto```, or by setting the environment variable ```JULIA_NUM_THREADS``` to ```auto``` before starting julia. (This will use the total number of CPU threads available on your computer. Alternatively, you can specify a number of threads in place of ```auto```.)
 
 ```julia
 julia> import FreeSurfer as fs
@@ -16,7 +16,17 @@ julia> aa = fs.mri_read("/usr/local/freesurfer/dev/subjects/fsaverage/mri/aparc+
 julia> fa = fs.mri_read("/usr/local/freesurfer/dev/trctrain/hcp/MGH35_HCP_FA_template.nii.gz");
 ```
 
-### Display volume and header summary info
+### Display volume and header summary info in the terminal
+
+```julia
+julia> fs.disp(aa)
+
+julia> fs.disp(fa)
+```
+
+### Display a slice view of the volume in a pop-up window
+
+By default this will be an axial view, middle slice, first frame. See ```?fs.show``` for how to change what is displayed.
 
 ```julia
 julia> fs.show(aa)
@@ -49,4 +59,8 @@ julia> tr = fs.trk_read("/usr/local/freesurfer/dev/trctrain/hcp/mgh_1001/syn/aco
 ```julia
 julia> fs.trk_write(tr, "/tmp/acomm.trk")
 ```
+
+### Tutorial
+
+[A gentle introduction to diffusion MRI](https://github.com/freesurfer/FreeSurfer.jl/blob/master/docs/tutorial.ipynb)
 
