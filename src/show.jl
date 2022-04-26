@@ -23,47 +23,36 @@ const julia_purple = RGB(.584, .345, .698)
 
 
 "Container for segmentation and tract look-up tables"
-mutable struct LUT
+struct LUT
   id::Vector{Int}
   name::Vector{String}
   rgb::Vector{RGB}
-end
 
+  function LUT(infile::String)
 
-"""
-    LUT()
+    if !isfile(infile)
+      error(infile * "is not a regular file")
+    end
 
-Return an empty `LUT` structure
-"""
-LUT() = LUT(
-  Vector{Int}(undef, 0),
-  Vector{String}(undef, 0),
-  Vector{RGB}(undef, 0)
-)
+    # Read a look-up table from an input file
+    # (assumed to have the format of FreeSurferColorLUT.txt)
+    tab = readdlm(infile; comments=true, comment_char='#')
 
+    # Label IDs
+    id   = tab[:,1]
 
-"""
-    LUT(infile::String)
+    # Label names
+    name = tab[:,2]
 
-Read a look-up table from `infile` and return a `LUT` structure
+    # Label display colors
+    rgb  = RGB.(tab[:,3]/255, tab[:,4]/255, tab[:,5]/255)
 
-The input file is assumed to have the format of FreeSurferColorLUT.txt
-"""
-function LUT(infile::String)
-
-  lut = LUT()
-
-  if !isfile(infile)
-    error(infile * "is not a regular file")
+    new(
+      id,
+      name,
+      rgb
+    )
   end
-
-  tab = readdlm(infile; comments=true, comment_char='#')
-
-  lut.id   = tab[:,1]
-  lut.name = tab[:,2]
-  lut.rgb  = RGB.(tab[:,3]/255, tab[:,4]/255, tab[:,5]/255)
-
-  return lut
 end
 
 
