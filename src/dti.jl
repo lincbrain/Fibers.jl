@@ -12,7 +12,7 @@
   Reporting: freesurfer@nmr.mgh.harvard.edu
 =#
 
-using LinearAlgebra, Statistics
+using LinearAlgebra, StaticArrays, Statistics
 
 export DTI, adc_fit, dti_fit, dti_write
 
@@ -107,7 +107,6 @@ Pre-allocated workspace for DTI fit computations
 - `d::Vector{Vector{T}}`       : Linear system solution vector [7]
 - `A::Matrix{T}`               : System matrix [nvol x 7]
 - `pA::Matrix{T}`              : Pseudo-inverse of system matrix [7 x nvol]
-- `D::Vector{Matrix{T}}`       : Diffusion tensor [3 x 3]
 """
 struct DTIwork{T}
   nvol::Int
@@ -117,7 +116,6 @@ struct DTIwork{T}
   d::Vector{Vector{T}}
   A::Matrix{T}
   pA::Matrix{T}
-  D::Vector{Matrix{T}}
 
   function DTIwork(bval::Vector{Float32},
                    bvec::Matrix{Float32}, T::DataType=Float32)
@@ -154,9 +152,6 @@ struct DTIwork{T}
     # Pseudo-inverse of system matrix
     pA = pinv(A)
 
-    # Diffusion tensor
-    D = [Matrix{T}(undef, 3, 3) for tid in 1:Threads.nthreads()]
-
     new{T}(
       nvol,
       ib0,
@@ -164,8 +159,7 @@ struct DTIwork{T}
       logs,
       d,
       A,
-      pA,
-      D
+      pA
     )
   end
 end
@@ -320,14 +314,11 @@ function dti_fit_ls(dwi::Vector{T}, W::DTIwork{T}) where T<:AbstractFloat
 
   s0 = exp(W.d[tid][7])
 
-  W.D[tid][1] = W.d[tid][1]
-  W.D[tid][2] = W.d[tid][2]
-  W.D[tid][3] = W.d[tid][3]
-  W.D[tid][5] = W.d[tid][4]
-  W.D[tid][6] = W.d[tid][5]
-  W.D[tid][9] = W.d[tid][6]
+  D = @SMatrix [ W.d[tid][1] 0           0;
+                 W.d[tid][2] W.d[tid][4] 0;
+                 W.d[tid][3] W.d[tid][5] W.d[tid][6] ]
 
-  E = eigen!(Symmetric(W.D[tid], :L))
+  E = eigen(Symmetric(D, :L))
 
   return s0, E.values[3], E.values[2], E.values[1],
              E.vectors[:, 3], E.vectors[:, 2], E.vectors[:, 1],
