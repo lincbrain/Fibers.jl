@@ -1,4 +1,4 @@
-<img src="https://user-images.githubusercontent.com/15318615/158502382-3d47c48b-e991-400b-8f7c-e745f32e9643.png" width=800>
+<img src="docs/fsjl-logo-dark.png" width=400>
 
 ### Import this package
 
