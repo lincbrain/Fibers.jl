@@ -12,7 +12,7 @@
   Reporting: freesurfer@nmr.mgh.harvard.edu
 =#
 
-export ODF
+export ODF, sphere_362, sphere_642, sphere_724
 
 "Vertices and faces for ODF computation"
 struct ODF

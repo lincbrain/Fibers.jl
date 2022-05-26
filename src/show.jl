@@ -14,7 +14,7 @@
 
 using ColorTypes, DelimitedFiles, Statistics, ImageInTerminal, Plots
 
-export LUT, color_lut, info, show
+export LUT, color_lut, info, disp, show
 
 const julia_red    = RGB(.796, .235, .200)
 const julia_blue   = RGB(.251, .388, .847)
@@ -269,13 +269,13 @@ end
 
 
 """
-    show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing)
+    Base.show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing)
 
 Show the `z`-th slice from the `t`-th frame of an `MRI`
 structure, along the specified `plane` ('a': axial; 's': sagittal; 'c':
 coronal).
 """
-function show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing, vec::Bool=true)
+function Base.show(mri::MRI; plane::Char='a', z::Union{Int64, Nothing}=nothing, t::Union{Int64, Nothing}=nothing, title::Union{String, Nothing}=nothing, vec::Bool=true)
 
   # Find which axes of the volume correspond to the specified viewing plane
   ax = view_axes(mri.vox2ras, plane)
