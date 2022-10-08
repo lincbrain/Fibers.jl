@@ -2020,7 +2020,7 @@ function mri_read_bfiles(infile1::String, infile2::String)
     end
 
     if size(tab[end], 2) > size(tab[end], 1)
-      tab[end] = permutedims(tab[end], 2:1)
+      tab[end] = permutedims(tab[end], [2,1])
     end
 
     if size(tab[end], 2) == 1
