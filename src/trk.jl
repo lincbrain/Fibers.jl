@@ -14,7 +14,7 @@
  
 using LinearAlgebra
 
-export Tract, trk_read, trk_write
+export Tract, str_add!, trk_read, trk_write
 
 
 "Container for header and streamline data stored in .trk format"
@@ -151,6 +151,60 @@ function Tract(ref::MRI)
   tr.hdr_size      = Int32(1000)
 
   return tr
+end
+
+
+"""
+     str_add!(tr::Tract, xyz::Vector{Matrix{T}}, scalars::Union{Vector{Matrix{T}}, Nothing}=nothing, properties::Union{Vector{Matrix{T}}, Nothing}=nothing) where T<:Number
+
+Append data for new streamlines to a Tract structure
+
+Required inputs
+  tr:         Tract structure that the streamlines will be added to
+  xyz:        Voxel coordinates of the points on the new streamlines
+
+Optional inputs (required only if Tract structure contains them)
+  scalars:    Scalars associated with each point on the new streamlines
+  properties: Properties associated with the new streamlines
+
+"""
+
+function str_add!(tr::Tract, xyz::Vector{Matrix{T}}, scalars::Union{Vector{Matrix{T}}, Nothing}=nothing, properties::Union{Vector{Matrix{T}}, Nothing}=nothing) where T<:Number
+
+  # Add to number of streamlines
+  tr.n_count += Int32(length(xyz))
+
+  # Append numbers of points per streamline
+  push!(tr.npts, Int32.(size.(xyz, 2))...)
+
+  # Append streamline coordinates
+  push!(tr.xyz, map(x -> Float32.(x), xyz)...)
+
+  # Append scalars associated with each point on each streamline (if any)
+  if (isnothing(scalars) && tr.n_scalars != 0) ||
+    (!isnothing(scalars) && any(size.(scalars, 1) .!= tr.n_scalars))
+    error("Must have " * string(tr.n_scalars) *
+          " input scalars per point to append to Tract structure")
+  end
+
+  if isnothing(scalars)
+    push!(tr.scalars, map(x -> Matrix{Float32}(undef, 0, x), size.(xyz, 2))...)
+  else
+    push!(tr.scalars, map(x -> Float32.(x), scalars)...)
+  end
+
+  # Append properties associated with each streamline (if any)
+  if (isnothing(properties) && tr.n_properties != 0) ||
+    (!isnothing(properties) && size(properties, 1) .!= tr.n_properties)
+    error("Must have " * string(tr.n_properties) *
+          " input properties per streamline to append to Tract structure")
+  end
+
+  if isnothing(properties)
+    tr.properties = hcat(tr.properties, Matrix{Float32}(undef, 0, tr.n_count))
+  else
+    tr.properties = hcat(tr.properties, Float32.(properties))
+  end
 end
 
 
