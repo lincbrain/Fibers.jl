@@ -14,11 +14,11 @@
  
 using LinearAlgebra
 
-export Tract, trk_read, trk_write
+export Tract, str_add!, trk_read, trk_write
 
 
 "Container for header and streamline data stored in .trk format"
-mutable struct Tract
+mutable struct Tract{T<:Number}
   # Header fields (.trk format version 2)
   id_string::Vector{UInt8}
   dim::Vector{Int16}
@@ -46,18 +46,18 @@ mutable struct Tract
 
   # Streamline data fields
   npts::Vector{Int32}
-  properties::Matrix{Float32}
-  xyz::Vector{Any}
-  scalars::Vector{Any}
+  properties::Matrix{T}
+  xyz::Vector{Matrix{T}}
+  scalars::Vector{Matrix{T}}
 end
 
 
 """
-    Tract()
+    Tract{T}()
 
-Return an empty `Tract` structure
+Return an empty `Tract` structure with data type T
 """
-Tract() = Tract(
+Tract{T}() where T<:Number = Tract{T}(
   Vector{UInt8}(undef, 0),
   Vector{Int16}(undef, 0),
   Vector{Float32}(undef, 0),
@@ -83,21 +83,21 @@ Tract() = Tract(
   Int32(0),
 
   Vector{Int32}(undef, 0),
-  Matrix{Float32}(undef, 0, 0),
-  [],
-  []
+  Matrix{T}(undef, 0, 0),
+  Vector{Matrix{T}}(undef, 0),
+  Vector{Matrix{T}}(undef, 0)
 )
 
 
 """
-    Tract(ref::MRI)
+    Tract{T}(ref::MRI) where T<:Number
 
-Return a `Tract` structure whose header fields are populated based on the
-reference `MRI` structure `ref`
+Return a `Tract` structure with data type T and header fields populated based
+on the reference `MRI` structure `ref`
 """
-function Tract(ref::MRI)
+function Tract{T}(ref::MRI) where T<:Number
 
-  tr = Tract()
+  tr = Tract{T}()
 
   # In the following I must take into account that mri_read()
   # may have permuted the first 2 dimensions of volsize and volres,
@@ -155,6 +155,66 @@ end
 
 
 """
+     str_add!(tr::Tract, xyz::Vector{Matrix{T}}, scalars::Union{Vector{Matrix{T}}, Nothing}=nothing, properties::Union{Matrix{T}, Nothing}=nothing) where T<:Number
+
+Append new streamlines of data type T to a Tract structure
+
+# Required inputs
+- tr::Tract:
+  Tract structure that the streamlines will be added to
+- xyz::Vector{Matrix{T}}:
+  Voxel coordinates of the points on the new streamlines [nstr][3 x npts]
+
+# Optional inputs (required only if Tract structure contains them)
+- scalars::Vector{Matrix{T}:
+  Scalars associated with each point on the new streamlines
+  [nstr][nscalar x npts]
+- properties::Matrix{T}:
+  Properties associated with each of the new streamlines [nprop x nstr]
+"""
+function str_add!(tr::Tract, xyz::Vector{Matrix{T}}, scalars::Union{Vector{Matrix{T}}, Nothing}=nothing, properties::Union{Matrix{T}, Nothing}=nothing) where T<:Number
+
+  # Data type in destination Tract() structure
+  Tout = eltype(tr.properties)
+
+  # Add to number of streamlines
+  tr.n_count += Int32(length(xyz))
+
+  # Append numbers of points per streamline
+  push!(tr.npts, Int32.(size.(xyz, 2))...)
+
+  # Append streamline coordinates
+  push!(tr.xyz, map(x -> Tout.(x), xyz)...)
+
+  # Append scalars associated with each point on each streamline (if any)
+  if (isnothing(scalars) && tr.n_scalars != 0) ||
+    (!isnothing(scalars) && any(size.(scalars, 1) .!= tr.n_scalars))
+    error("Must have " * string(tr.n_scalars) *
+          " input scalars per point to append to Tract structure")
+  end
+
+  if isnothing(scalars)
+    push!(tr.scalars, map(x -> Matrix{Tout}(undef, 0, x), size.(xyz, 2))...)
+  else
+    push!(tr.scalars, map(x -> Tout.(x), scalars)...)
+  end
+
+  # Append properties associated with each streamline (if any)
+  if (isnothing(properties) && tr.n_properties != 0) ||
+    (!isnothing(properties) && size(properties, 1) .!= tr.n_properties)
+    error("Must have " * string(tr.n_properties) *
+          " input properties per streamline to append to Tract structure")
+  end
+
+  if isnothing(properties)
+    tr.properties = hcat(tr.properties, Matrix{Tout}(undef, 0, length(xyz)))
+  else
+    tr.properties = hcat(tr.properties, Tout.(properties))
+  end
+end
+
+
+"""
     trk_read(infile::String)
 
 Read tractography streamlines from `infile` and return a `Tract` structure
@@ -164,7 +224,9 @@ http://trackvis.org/docs/?subsect=fileformat
 """
 function trk_read(infile::String)
 
-  tr = Tract()
+  T = Float32			# Data type in .trk files is always Float32
+
+  tr = Tract{T}()
 
   io = open(infile, "r")
 
@@ -203,23 +265,23 @@ function trk_read(infile::String)
 
   # Read streamline data
   tr.npts       = Vector{Int32}(undef, tr.n_count)
-  tr.properties = Matrix{Float32}(undef, tr.n_properties, tr.n_count)
+  tr.properties = Matrix{T}(undef, tr.n_properties, tr.n_count)
 
   for istr in 1:tr.n_count		# Loop over streamlines
     tr.npts[istr] = read(io, Int32)
 
-    push!(tr.xyz, Matrix{Float32}(undef, 3, tr.npts[istr]))
-    push!(tr.scalars, Matrix{Float32}(undef, tr.n_scalars, tr.npts[istr]))
+    push!(tr.xyz, Matrix{T}(undef, 3, tr.npts[istr]))
+    push!(tr.scalars, Matrix{T}(undef, tr.n_scalars, tr.npts[istr]))
 
     for ipt in 1:tr.npts[istr]		# Loop over points on a streamline
       # Divide by voxel size and make voxel coordinates 0-based
-      tr.xyz[istr][:, ipt] = read!(io, Vector{Float32}(undef, 3)) ./
+      tr.xyz[istr][:, ipt] = read!(io, Vector{T}(undef, 3)) ./
                              tr.voxel_size .- .5
 
-      tr.scalars[istr][:, ipt] = read!(io, Vector{Float32}(undef, tr.n_scalars))
+      tr.scalars[istr][:, ipt] = read!(io, Vector{T}(undef, tr.n_scalars))
     end
 
-    tr.properties[:, istr] = read!(io, Vector{Float32}(undef, tr.n_properties))
+    tr.properties[:, istr] = read!(io, Vector{T}(undef, tr.n_properties))
   end
 
   close(io)
@@ -236,6 +298,8 @@ Return true if an error occurred (i.e., the number of bytes written was not the
 expected based on the size of the `Tract` structure)
 """
 function trk_write(tr::Tract, outfile::String)
+
+  T = Float32			# Data type in .trk files is always Float32
 
   io = open(outfile, "w")
 
@@ -276,12 +340,12 @@ function trk_write(tr::Tract, outfile::String)
 
     for ipt in 1:tr.npts[istr]		# Loop over points on a streamline
       # Make voxel coordinates .5-based and multiply by voxel size
-      nb += write(io, Float32.((tr.xyz[istr][:, ipt] .+ .5) .* tr.voxel_size))
+      nb += write(io, T.((tr.xyz[istr][:, ipt] .+ .5) .* tr.voxel_size))
 
-      nb += write(io, Float32.(tr.scalars[istr][:, ipt]))
+      nb += write(io, T.(tr.scalars[istr][:, ipt]))
     end
 
-    nb += write(io, Float32.(tr.properties[:, istr]))
+    nb += write(io, T.(tr.properties[:, istr]))
   end
 
   close(io)
@@ -289,9 +353,10 @@ function trk_write(tr::Tract, outfile::String)
   err = (nb != sizeof(UInt8) * 866 +
                sizeof(Int32) * (3 + length(tr.npts)) +
                sizeof(Int16) * 5 +
-               sizeof(Float32) * (28 + sum(length.(tr.xyz)) +
-                                       sum(length.(tr.scalars)) +
-                                       length(tr.properties)))
+               sizeof(Float32) * 28 +
+               sizeof(T) * (sum(length.(tr.xyz)) +
+                            sum(length.(tr.scalars)) +
+                            length(tr.properties)))
 
   return err
 end
