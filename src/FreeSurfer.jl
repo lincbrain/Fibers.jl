@@ -21,6 +21,7 @@ include("show.jl")
 include("util.jl")
 include("dti.jl")
 include("odf.jl")
+include("dsi.jl")
 include("gqi.jl")
 include("rusd.jl")
 

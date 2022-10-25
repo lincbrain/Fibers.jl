@@ -14,7 +14,7 @@
 
 using Statistics
 
-export GQI, gqi_rec, gqi_write
+export GQI, gqi_rec, find_peaks!, gqi_write
 
 "Container for outputs of a GQI fit"
 struct GQI
@@ -182,12 +182,12 @@ end
 
 
 """
-    find_peaks!(W::GQIwork)
+    find_peaks!(W::Union{GQIwork, DSIwork})
 
 Find the vertices whose amplitudes are local peaks and return them sorted
 (assume that ODF amplitudes have been computed)
 """
-function find_peaks!(W::GQIwork)
+function find_peaks!(W::Union{GQIwork, DSIwork})
 
   tid = Threads.threadid()
 
