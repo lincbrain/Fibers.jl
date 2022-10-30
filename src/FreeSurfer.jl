@@ -24,6 +24,7 @@ include("odf.jl")
 include("dsi.jl")
 include("gqi.jl")
 include("rusd.jl")
+include("stream.jl")
 
 function __init__()
 
