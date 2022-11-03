@@ -155,61 +155,123 @@ end
 
 
 """
-     str_add!(tr::Tract, xyz::Vector{Matrix{T}}, scalars::Union{Vector{Matrix{T}}, Nothing}=nothing, properties::Union{Matrix{T}, Nothing}=nothing) where T<:Number
+    function str_add!(tr::Tract{T}, xyz::Vector{Matrix{Txyz}}, scalars::Union{Vector{Matrix{Ts}}, Vector{Vector{Ts}}, Nothing}=nothing, properties::Union{Matrix{Tp}, Vector{Tp}, Nothing}=nothing) where {T<:Number, Txyz<:Number, Ts<:Number, Tp<:Number}
 
-Append new streamlines of data type T to a Tract structure
+Append new streamlines to a Tract structure of data type T
 
 # Required inputs
-- tr::Tract:
+- tr::Tract{T}:
   Tract structure that the streamlines will be added to
-- xyz::Vector{Matrix{T}}:
+- xyz::Vector{Matrix}:
   Voxel coordinates of the points on the new streamlines [nstr][3 x npts]
 
 # Optional inputs (required only if Tract structure contains them)
-- scalars::Vector{Matrix{T}:
+- scalars::Union{Vector{Matrix}, Vector{Vector}, Nothing}:
   Scalars associated with each point on the new streamlines
-  [nstr][nscalar x npts]
-- properties::Matrix{T}:
-  Properties associated with each of the new streamlines [nprop x nstr]
+  [nstr][nscalar x npts] or (if nscalar == 1) [nstr][npts]
+- properties::Union{Matrix, Vector, Nothing}:
+  Properties associated with each of the new streamlines [nprop x nstr] or
+  (if nprop == 1) [nstr]
 """
-function str_add!(tr::Tract, xyz::Vector{Matrix{T}}, scalars::Union{Vector{Matrix{T}}, Nothing}=nothing, properties::Union{Matrix{T}, Nothing}=nothing) where T<:Number
+function str_add!(tr::Tract{T}, xyz::Vector{Matrix{Txyz}}, scalars::Union{Vector{Matrix{Ts}}, Vector{Vector{Ts}}, Nothing}=nothing, properties::Union{Matrix{Tp}, Vector{Tp}, Nothing}=nothing) where {T<:Number, Txyz<:Number, Ts<:Number, Tp<:Number}
 
-  # Data type in destination Tract() structure
-  Tout = eltype(tr.properties)
+  # Check dimensions of streamline data to be added
+  if any(size.(xyz, 1) .!= 3)
+    error("Each streamline must be defined as a matrix with 3 rows")
+  end
 
-  # Add to number of streamlines
-  tr.n_count += Int32(length(xyz))
+  add_scalars    = !(isnothing(scalars)    || isempty(scalars))
+  add_properties = !(isnothing(properties) || isempty(properties))
 
-  # Append numbers of points per streamline
-  push!(tr.npts, Int32.(size.(xyz, 2))...)
+  if add_scalars
+    if all(isa.(scalars, AbstractMatrix))
+      if any(size.(xyz, 2) .!= size.(scalars, 2))
+        error("Incosistent number of points between streamlines and scalars")
+      else
+        nscal = size(scalars[1], 1)
 
-  # Append streamline coordinates
-  push!(tr.xyz, map(x -> Tout.(x), xyz)...)
+        if any(size.(scalars, 1) .!= nscal)
+          error("Incosistent number of scalars between streamlines")
+        end
+      end
+    elseif all(isa.(scalars, AbstractVector))
+      if any(size.(xyz, 2) .!= length.(scalars))
+        error("Incosistent number of points between streamlines and scalars")
+      else
+        nscal = 1
+      end
+    end
 
-  # Append scalars associated with each point on each streamline (if any)
-  if (isnothing(scalars) && tr.n_scalars != 0) ||
-    (!isnothing(scalars) && any(size.(scalars, 1) .!= tr.n_scalars))
+    if tr.n_count == 0		# If this is a previously empty Tract structure
+      tr.n_scalars = nscal
+    end
+  else
+    nscal = 0
+  end
+
+  if tr.n_scalars != nscal
     error("Must have " * string(tr.n_scalars) *
           " input scalars per point to append to Tract structure")
   end
 
-  if isnothing(scalars)
-    push!(tr.scalars, map(x -> Matrix{Tout}(undef, 0, x), size.(xyz, 2))...)
+  if add_properties
+    if isa(properties, AbstractMatrix)
+      if length(xyz) != size.(properties, 2)
+        error("Incosistent number of streamlines and property values")
+      else
+        nprop = size(properties, 1)
+      end
+    elseif isa(properties, AbstractVector)
+      if length(xyz) != length(properties)
+        error("Incosistent number of streamlines and property values")
+      else
+        nprop = 1
+      end
+    end
+
+    if tr.n_count == 0		# If this is a previously empty Tract structure
+      tr.n_properties = nprop
+    end
   else
-    push!(tr.scalars, map(x -> Tout.(x), scalars)...)
+    nprop = 0
   end
 
-  # Append properties associated with each streamline (if any)
-  if (isnothing(properties) && tr.n_properties != 0) ||
-    (!isnothing(properties) && size(properties, 1) .!= tr.n_properties)
+  if tr.n_properties != nprop
     error("Must have " * string(tr.n_properties) *
           " input properties per streamline to append to Tract structure")
   end
 
-  if isnothing(properties)
-    tr.properties = hcat(tr.properties, Matrix{Tout}(undef, 0, length(xyz)))
+  # Add to number of streamlines
+  tr.n_count += Int32(length(xyz))
+
+  for istr in eachindex(xyz)
+    # Append number of points on streamline
+    push!(tr.npts, Int32(size(xyz[istr], 2)))
+
+    # Append streamline coordinates
+    push!(tr.xyz, T.(xyz[istr]))
+
+    # Append scalars associated with each point on the streamline (if any)
+    if add_scalars
+      if nscal > 1
+        push!(tr.scalars, T.(scalars[istr]))
+      else
+        push!(tr.scalars, T.(permutedims(scalars[istr])))
+      end
+    else
+      push!(tr.scalars, Matrix{T}(undef, 0, tr.npts[end]))
+    end
+  end
+
+  # Append properties associated with each streamline (if any)
+  if add_properties
+    if nprop > 1
+      tr.properties = hcat(tr.properties, T.(properties))
+    else
+      tr.properties = hcat(tr.properties, T.(permutedims(properties)))
+    end
   else
-    tr.properties = hcat(tr.properties, Tout.(properties))
+    tr.properties = hcat(tr.properties, Matrix{T}(undef, 0, length(xyz)))
   end
 end
 
