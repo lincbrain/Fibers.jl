@@ -15,10 +15,10 @@
 module FreeSurfer
 
 include("mri.jl")
+include("util.jl")
 include("trk.jl")
 include("show.jl")
 #include("view.jl")
-include("util.jl")
 include("dti.jl")
 include("odf.jl")
 include("dsi.jl")

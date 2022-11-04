@@ -14,7 +14,7 @@
  
 using LinearAlgebra
 
-export Tract, str_add!, trk_read, trk_write
+export Tract, str_add!, str_merge, str_xform, trk_read, trk_write
 
 
 "Container for header and streamline data stored in .trk format"
@@ -155,7 +155,7 @@ end
 
 
 """
-    function str_add!(tr::Tract{T}, xyz::Vector{Matrix{Txyz}}, scalars::Union{Vector{Matrix{Ts}}, Vector{Vector{Ts}}, Nothing}=nothing, properties::Union{Matrix{Tp}, Vector{Tp}, Nothing}=nothing) where {T<:Number, Txyz<:Number, Ts<:Number, Tp<:Number}
+    str_add!(tr::Tract{T}, xyz::Vector{Matrix{Txyz}}, scalars::Union{Vector{Matrix{Ts}}, Vector{Vector{Ts}}, Nothing}=nothing, properties::Union{Matrix{Tp}, Vector{Tp}, Nothing}=nothing) where {T<:Number, Txyz<:Number, Ts<:Number, Tp<:Number}
 
 Append new streamlines to a Tract structure of data type T
 
@@ -273,6 +273,90 @@ function str_add!(tr::Tract{T}, xyz::Vector{Matrix{Txyz}}, scalars::Union{Vector
   else
     tr.properties = hcat(tr.properties, Matrix{T}(undef, 0, length(xyz)))
   end
+end
+
+
+"""
+    str_merge(tr1::Tract{T}, tr2::Tract{T}...) where T<:Number
+
+Merge streamlines from two or more Tract structures and return a new Tract
+structure
+"""
+function str_merge(tr1::Tract{T}, tr2::Tract{T}...) where T<:Number
+
+  tr = copy(tr1)
+
+  for trnew in tr2
+    # Check header fields for mismatch
+    for var in fieldnames(Tract)
+      var in (:n_count, :npts, :xyz, :scalars, :properties) && continue
+
+      if getfield(tr, var) != getfield(trnew, var)
+        error("Mismatch in header field " * var * " between input tracts (" *
+              getfield(tr, var) * ", " * getfield(trnew, var) * ")")
+      end
+    end
+
+    # Add to number of streamlines
+    tr.n_count += trnew.n_count
+
+    # Append number of points on each streamline
+    append!(tr.npts, trnew.npts)
+
+    # Append point coordinates of each streamline
+    append!(tr.xyz, trnew.xyz)
+
+    # Append scalars associated with each point on each streamline
+    append!(tr.scalars, trnew.scalars)
+
+    # Append properties associated with each streamline
+    tr.properties = hcat(tr.properties, trnew.properties)
+  end
+
+  return tr
+end
+
+
+"""
+    str_xform(xfm::Xform{T}, tr::Tract{T}) where T<:Number
+
+Apply a transform to streamline coordinates and return a new `Tract` structure
+"""
+function str_xform(xfm::Xform{T}, tr::Tract{T}) where T<:Number
+
+  trnew = Tract{T}()
+
+  # Copy all fields that are not changed by applying the transform
+  for var in setdiff(fieldnames(Tract), (:dim, :voxel_size, :vox_to_ras,
+                                         :image_orientation_patient, :xyz))
+    setfield!(trnew, var, getfield(tr, var))
+  end
+
+  # Update matrix size
+  trnew.dim = round.(Int16, tr.dim .* xfm.inres ./ xfm.outres)
+
+  # Update voxel size
+  trnew.voxel_size = Float32.(xfm.outres)
+
+  # Update vox2ras matrix
+  trnew.vox_to_ras = tr.vox_to_ras * Diagonal(vcat(1 ./ xfm.inres, 1)) *
+                                     inv(xfm.mat) *
+                                     Diagonal(vcat(xfm.outres, 1))
+
+  orient = vox2ras_to_orient(trnew.vox_to_ras)
+  trnew.voxel_order          = vcat(UInt8.(collect(orient)), UInt8(0))
+  trnew.voxel_order_original = trnew.voxel_order
+
+  p2s = [-1 0 0; 0 -1 0; 0 0 1] * trnew.vox_to_ras[1:3, 1:2] *
+                                  Diagonal([1, 1]./trnew.voxel_size[1:2])
+  trnew.image_orientation_patient = Float32.(p2s[:])
+
+  # Apply transform to streamline coordinates
+  for istr in eachindex(tr.xyz)
+    push!(trnew.xyz, mapslices(p -> xform(xfm, p), tr.xyz[istr], dims=1))
+  end
+
+  return trnew
 end
 
 
