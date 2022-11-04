@@ -12,7 +12,9 @@
   Reporting: freesurfer@nmr.mgh.harvard.edu
 =#
 
-export cart2pol, pol2cart, cart2sph, sph2cart
+using DelimitedFiles, LinearAlgebra
+
+export cart2pol, pol2cart, cart2sph, sph2cart, Xform, xform, xform!
 
 
 """
@@ -103,6 +105,117 @@ function ang2rot(φ, θ)
   R =  Rz * Ry
 
   return R
+end
+
+
+"Container for an image transform"
+struct Xform{T<:Number}
+  # Input and output voxel sizes
+  inres::Vector{T}
+  outres::Vector{T}
+
+  # Forward and inverse transformation matrix
+  mat::Matrix{T}
+  invmat::Matrix{T}
+end
+
+
+"""
+    Xform{T}()
+
+Return an empty `Xform` structure with data type T
+"""
+Xform{T}() where T<:Number = Xform{T}(
+  Vector{T}(undef, 3),
+  Vector{T}(undef, 3),
+  Matrix{T}(undef, 4, 4),
+  Matrix{T}(undef, 4, 4)
+)
+
+
+"""
+    Xform{T}(matfile::String, inres::Vector, outres::Vector)
+
+Read a transform from a .mat file and return an `Xform` structure
+
+The voxel sizes of the input and output space of the transform must also be
+specified, as vectors of length 3
+"""
+function Xform{T}(matfile::String, inres::Vector, outres::Vector) where T<:Number
+
+  xfm = Xform{T}()
+
+  xfm.inres  .= inres
+  xfm.outres .= outres
+  xfm.mat    .= readdlm(matfile)
+  xfm.invmat .= inv(xfm.mat)
+
+  return xfm
+end
+
+
+"""
+    Base.inv(xfm::Xform{T})
+
+Invert a transform and return a new `Xform` structure
+"""
+function Base.inv(xfm::Xform{T}) where T<:Number
+
+  ixfm = Xform{T}()
+
+  ixfm.inres  .= xfm.outres
+  ixfm.outres .= xfm.inres
+  ixfm.mat    .= xfm.invmat
+  ixfm.invmat .= xfm.mat
+
+  return ixfm
+end
+
+
+"""
+    xform(xfm::Xform{T}, point::Vector{T})
+
+Apply a transform specified in an `Xform` structure to a point specified in a
+vector of length 3, and return the transformed point as a vector of length 3
+"""
+function xform(xfm::Xform{T}, point::Vector{T}) where T<:Number
+
+  newpoint = Vector{T}(undef, 3)
+
+  xform!(newpoint, xfm, point)
+
+  return newpoint
+end
+
+
+"""
+    xform!(outpoint::Vector{T}, xfm::Xform{T}, inpoint::Vector{T})
+
+Apply a transform specified in an `Xform` structure to a point specified in a
+vector of length 3, in place
+"""
+function xform!(outpoint::Vector{T}, xfm::Xform{T}, inpoint::Vector{T}) where T<:Number
+
+  fill!(outpoint, 0)
+
+  aff = 0
+
+  for j in 1:3
+    coord = xfm.inres[j] * inpoint[j]
+
+    for i in 1:3
+      outpoint[i] += (xfm.mat[i, j] * coord)
+    end
+
+    aff += xfm.mat[4, j] * coord
+  end
+
+  aff += xfm.mat[4, 4]
+  
+  for i in 1:3
+    outpoint[i] += xfm.mat[i, 4]
+    outpoint[i] /= (xfm.outres[i] * aff)
+  end
 end
 
 
