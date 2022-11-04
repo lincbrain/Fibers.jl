@@ -110,13 +110,10 @@ end
 
 "Container for an image transform"
 struct Xform{T<:Number}
-  # Input and output voxel sizes
-  inres::Vector{T}
-  outres::Vector{T}
-
-  # Forward and inverse transformation matrix
-  mat::Matrix{T}
-  invmat::Matrix{T}
+  inres::Vector{T}	# Input voxel size
+  outres::Vector{T}	# Output voxel size
+  mat::Matrix{T}	# Affine transformation matrix
+  rot::Matrix{T}	# Rotational component
 end
 
 
@@ -129,7 +126,7 @@ Xform{T}() where T<:Number = Xform{T}(
   Vector{T}(undef, 3),
   Vector{T}(undef, 3),
   Matrix{T}(undef, 4, 4),
-  Matrix{T}(undef, 4, 4)
+  Matrix{T}(undef, 3, 3)
 )
 
 
@@ -148,7 +145,10 @@ function Xform{T}(matfile::String, inres::Vector, outres::Vector) where T<:Numbe
   xfm.inres  .= inres
   xfm.outres .= outres
   xfm.mat    .= readdlm(matfile)
-  xfm.invmat .= inv(xfm.mat)
+
+  # Compute rotational component
+  matsvd = svd(xfm.mat[1:3, 1:3])
+  mul!(xfm.rot, matsvd.U, matsvd.Vt)
 
   return xfm
 end
@@ -165,8 +165,8 @@ function Base.inv(xfm::Xform{T}) where T<:Number
 
   ixfm.inres  .= xfm.outres
   ixfm.outres .= xfm.inres
-  ixfm.mat    .= xfm.invmat
-  ixfm.invmat .= xfm.mat
+  ixfm.mat    .= inv(xfm.mat)
+  ixfm.rot    .= xfm.rot'
 
   return ixfm
 end
