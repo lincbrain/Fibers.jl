@@ -284,7 +284,7 @@ structure
 """
 function str_merge(tr1::Tract{T}, tr2::Tract{T}...) where T<:Number
 
-  tr = copy(tr1)
+  tr = deepcopy(tr1)
 
   for trnew in tr2
     # Check header fields for mismatch
@@ -292,8 +292,9 @@ function str_merge(tr1::Tract{T}, tr2::Tract{T}...) where T<:Number
       var in (:n_count, :npts, :xyz, :scalars, :properties) && continue
 
       if getfield(tr, var) != getfield(trnew, var)
-        error("Mismatch in header field " * var * " between input tracts (" *
-              getfield(tr, var) * ", " * getfield(trnew, var) * ")")
+        error("Mismatch in header field " * string(var) *
+              " between input tracts (" * string(getfield(tr, var)) * ", " *
+                                          string(getfield(trnew, var)) * ")")
       end
     end
 
@@ -333,15 +334,13 @@ function str_xform(xfm::Xform{T}, tr::Tract{T}) where T<:Number
   end
 
   # Update matrix size
-  trnew.dim = round.(Int16, tr.dim .* xfm.inres ./ xfm.outres)
+  trnew.dim = Int16.(xfm.outsize)
 
   # Update voxel size
   trnew.voxel_size = Float32.(xfm.outres)
 
   # Update vox2ras matrix
-  trnew.vox_to_ras = tr.vox_to_ras * Diagonal(vcat(1 ./ xfm.inres, 1)) *
-                                     inv(xfm.mat) *
-                                     Diagonal(vcat(xfm.outres, 1))
+  trnew.vox_to_ras = Float32.(xfm.outvox2ras)
 
   orient = vox2ras_to_orient(trnew.vox_to_ras)
   trnew.voxel_order          = vcat(UInt8.(collect(orient)), UInt8(0))
@@ -353,7 +352,7 @@ function str_xform(xfm::Xform{T}, tr::Tract{T}) where T<:Number
 
   # Apply transform to streamline coordinates
   for istr in eachindex(tr.xyz)
-    push!(trnew.xyz, mapslices(p -> xform(xfm, p), tr.xyz[istr], dims=1))
+    push!(trnew.xyz, mapslices(p -> xfm_apply(xfm, p), tr.xyz[istr], dims=1))
   end
 
   return trnew
