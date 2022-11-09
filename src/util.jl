@@ -15,7 +15,7 @@
 using DelimitedFiles, LinearAlgebra
 
 export cart2pol, pol2cart, cart2sph, sph2cart,
-       Xform, xfm_read, xfm_apply, xfm_apply!
+       Xform, xfm_read, xfm_compose, xfm_apply, xfm_apply!
 
 
 """
@@ -315,13 +315,49 @@ function Base.inv(xfm::Xform{T}) where T<:Number
 
   ixfm = Xform{T}()
 
-  ixfm.inres   .= xfm.outres
-  ixfm.outres  .= xfm.inres
-  ixfm.vox2vox .= inv(xfm.vox2vox)
-  ixfm.ras2ras .= inv(xfm.ras2ras)
-  ixfm.voxrot  .= xfm.voxrot'
+  ixfm.insize     .= xfm.outsize
+  ixfm.outsize    .= xfm.insize
+  ixfm.inres      .= xfm.outres
+  ixfm.outres     .= xfm.inres
+  ixfm.invox2ras  .= xfm.outvox2ras
+  ixfm.outvox2ras .= xfm.invox2ras
+  ixfm.vox2vox    .= inv(xfm.vox2vox)
+  ixfm.ras2ras    .= inv(xfm.ras2ras)
+  ixfm.voxrot     .= xfm.voxrot'
 
   return ixfm
+end
+
+
+"""
+    xfm_compose(xfm1::Xform{T}, xfm2::Xform{T}...)
+
+Compose two transforms and return a new `Xform` structure
+
+Note that the last argument of this function is the "innermost" transform,
+i.e., the one that would be applied first to the input data, and the first
+argument is the "outermost" transform, i.e., the one that would be applied
+last: output = `xfm1` * `xfm2` * ... * input
+"""
+function xfm_compose(xfm1::Xform{T}, xfm2::Xform{T}...) where T<:Number
+
+  xfm = Xform{T}()
+
+  xfm.insize     .= xfm2[end].insize
+  xfm.outsize    .= xfm1.outsize
+  xfm.inres      .= xfm2[end].inres
+  xfm.outres     .= xfm1.outres
+  xfm.invox2ras  .= xfm2[end].invox2ras
+  xfm.outvox2ras .= xfm1.outvox2ras
+
+  xfm.vox2vox    .= *(xfm1.vox2vox, getfield.(xfm2, :vox2vox)...) 
+  xfm.ras2ras    .= *(xfm1.ras2ras, getfield.(xfm2, :ras2ras)...)
+
+  # Compute rotational component
+  matsvd = svd(xfm.vox2vox[1:3, 1:3])
+  mul!(xfm.voxrot, matsvd.U, matsvd.Vt)
+
+  return xfm
 end
 
 
