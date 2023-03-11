@@ -825,6 +825,8 @@ function load_bruker(indir::String, headeronly::Bool=false)
   mri.fspec = imgfile
   mri.pwd = pwd()
 
+  slicethick = 1
+  nslice = 1
   nb0 = 0
 
   # Read information for the image header from the Bruker method file
@@ -841,6 +843,13 @@ function load_bruker(indir::String, headeronly::Bool=false)
       ln = readline(io)
       ln = split(ln)
       mri.volsize = parse.(Float32, ln)
+    elseif startswith(ln, "##\$PVM_SliceThick=")	# Slice thickness (2D)
+      ln = split(ln, "=")[2]
+      slicethick = parse(Float32, ln)
+    elseif startswith(ln, "##\$PVM_SPackArrNSlices=")	# Number of slices (2D)
+      ln = readline(io)
+      ln = split(ln)
+      nslice = sum(parse.(Float32, ln))
     elseif startswith(ln, "##\$EchoTime=")		# TE
       ln = split(ln, "=")[2]
       mri.te = parse(Float32, ln)
@@ -898,6 +907,14 @@ function load_bruker(indir::String, headeronly::Bool=false)
   # (The method file includes them in the list of b-values but not vectors)
   for ib0 in 1:nb0
     mri.bvec = vcat([0 0 0], mri.bvec)
+  end
+
+  # For 2D scans, append resolution and matrix size in the slice dimension
+  is2d = (length(mri.volres) == 2 && length(mri.volsize) == 2) ? true : false
+
+  if is2d
+    push!(mri.volres, slicethick)
+    push!(mri.volsize, nslice)
   end
 
   # Read receiver gain from Bruker acqp file
@@ -974,7 +991,7 @@ function load_bruker(indir::String, headeronly::Bool=false)
 
   close(io)
 
-  mri.nframes = length(int_slope)
+  mri.nframes = is2d ? length(int_slope) ÷ nslice : length(int_slope)
 
   mri.vox2ras0 = Matrix(Diagonal([mri.volres; 1]))
 
@@ -1002,9 +1019,21 @@ function load_bruker(indir::String, headeronly::Bool=false)
     mri.vol = Float32.(vol)
   else
     mri.vol = Array{Float32}(undef, size(vol))
-    for iframe in 1:mri.nframes
-      mri.vol[:,:,:,iframe] = vol[:,:,:,iframe] ./ int_slope[iframe] .+
-                                                   int_offset[iframe]
+
+    if is2d	# One slope/offset per slice
+      k = 1
+      for iframe in 1:mri.nframes
+        for islice in 1:mri.volsize[3]
+          mri.vol[:,:,islice,iframe] = vol[:,:,islice,iframe] ./ int_slope[k] .+
+                                                                 int_offset[k]
+          k += 1
+        end
+      end
+    else	# One slope/offset per volume
+      for iframe in 1:mri.nframes
+        mri.vol[:,:,:,iframe] = vol[:,:,:,iframe] ./ int_slope[iframe] .+
+                                                     int_offset[iframe]
+      end
     end
   end
 
