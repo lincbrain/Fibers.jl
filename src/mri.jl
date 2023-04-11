@@ -573,7 +573,7 @@ end
 
 
 """
-    mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=false)
+    mri_read(infile::String; headeronly::Bool=false, permutedata::Bool=false, reco::Integer=1)
 
 Read an image volume from disk and return an `MRI` structure similar to the
 FreeSurfer MRI struct defined in mri.h.
@@ -587,13 +587,19 @@ FreeSurfer MRI struct defined in mri.h.
   4. A Bruker scan directory, which is expected to contain the following files:
      method, acqp, pdata/1/reco, pdata/1/2dseq
 
+# Optional arguments
 - `headeronly::Bool=false`: If true, the pixel data are not read in.
 
-- `permuteflag::Bool==false`: If true, the first two dimensions of the image
+- `permutedata::Bool==false`: If true, the first two dimensions of the image
   volume are permuted in the .vol, .volsize, and .volres fields of the output
   structure (this is the default behavior of the MATLAB version). The
-  `permuteflag` will not affect the vox2ras matrices, which always map indices
+  `permutedata` will not affect the vox2ras matrices, which always map indices
   in the (column, row, slice) convention.
+
+- `reco::Integer=1`: (Only relevant to reading Bruker scan directories) Number
+  of image reconstruction to load, where 1 denotes the online reconstruction
+  and higher numbers denote any additional offline reconstructions performed
+  after acquisition.
 
 # Output
 In the `MRI` structure:
@@ -612,10 +618,10 @@ In the `MRI` structure:
 - `niftihdr`: If the input file is NIfTI, this field contains a `NIfTIheader`
   structure.
 """
-function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=false)
+function mri_read(infile::String; headeronly::Bool=false, permutedata::Bool=false, reco::Integer=1)
 
   if isdir(infile)					#------ Bruker -------#
-    mri = load_bruker(infile)
+    mri = load_bruker(infile; headeronly=headeronly, reco=reco)
   else
     (fname, fstem, fext) = mri_filename(infile)
     if isempty(fname) 
@@ -624,7 +630,7 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
 
     if any(fext .== ["mgh", "mgz"])			#-------- MGH --------#
       (vol, M, mr_parms, volsz) = 
-       load_mgh(fname, nothing, nothing, headeronly)
+       load_mgh(fname; headeronly=headeronly)
 
       mri = MRI(vol)
 
@@ -645,9 +651,9 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
       mri.nframes = length(volsz) < 4 ? 1 : volsz[4]
     elseif any(fext .== ["nii", "nii.gz"])		#------- NIfTI -------#
       if headeronly
-        hdr = load_nifti(fname, headeronly)
+        hdr = load_nifti(fname; headeronly=headeronly)
       else
-        hdr, vol = load_nifti(fname, headeronly)
+        hdr, vol = load_nifti(fname; headeronly=headeronly)
 
         isempty(vol) && error("Loading " * fname * " as NIfTI")
       end
@@ -656,7 +662,7 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
       # When data have > 4 dims, put all data into dim 4.
       volsz = Int.(hdr.dim[2:end])
       volsz = volsz[findall(volsz.>0)]
-      if ~headeronly
+      if !headeronly
         if length(volsz) < 5
           mri = MRI(vol)
         else
@@ -685,25 +691,25 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
 
     bfile = fstem * ".bvals"
 
-    if ~isfile(bfile)
+    if !isfile(bfile)
       bfile = fstem * ".bval"
 
-      if ~isfile(bfile)
+      if !isfile(bfile)
         bfile = ""
       end
     end
 
     gfile = fstem * ".bvecs"
 
-    if ~isfile(gfile)
+    if !isfile(gfile)
       gfile = fstem * ".bvec"
 
-      if ~isfile(gfile)
+      if !isfile(gfile)
         gfile = ""
       end
     end
 
-    if ~isempty(bfile) && ~isempty(gfile)
+    if !isempty(bfile) && !isempty(gfile)
       (b, g) = mri_read_bfiles(bfile, gfile)
 
       if length(b) == mri.nframes
@@ -725,7 +731,7 @@ function mri_read(infile::String, headeronly::Bool=false, permuteflag::Bool=fals
 
   # Permute volume from col-row-slice to row-col-slice, if desired
   # (This is the default behavior in the MATLAB version, but not here)
-  if permuteflag
+  if permutedata
     mri.vol = permutedims(mri.vol, [2; 1; 3:ndims(mri.vol)])
     mri.volsize = mri.volsize[[2,1,3]]
     mri.volres = mri.volres[[2,1,3]]
@@ -796,7 +802,7 @@ end
 
 
 """
-    load_bruker(indir::String, headeronly::Bool=false)
+    load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
 Read Bruker image data from disk and return an `MRI` structure similar to the
 FreeSurfer MRI struct defined in mri.h.
@@ -805,19 +811,25 @@ FreeSurfer MRI struct defined in mri.h.
 - `indir::String`: Path to a Bruker scan directory (files called method, acqp,
 pdata/1/reco, and pdata/1/2dseq are expected to be found in it)
 
+# Optional arguments
 - `headeronly::Bool=false`: If true, the pixel data are not read in.
+
+- `reco::Integer=1`: Number of image reconstruction to load, where 1 denotes
+  the online reconstruction and higher numbers denote any additional offline
+  reconstructions performed after acquisition.
 """
-function load_bruker(indir::String, headeronly::Bool=false)
+function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
   dname = abspath(indir)
   methfile = dname * "/method" 
   acqpfile = dname * "/acqp" 
-  recofile = dname * "/pdata/1/reco"
-  imgfile  = dname * "/pdata/1/2dseq"
+  recofile = dname * "/pdata/" * string(reco) * "/reco"
+  imgfile  = dname * "/pdata/" * string(reco) * "/2dseq"
 
   if any(.!isfile.([methfile, acqpfile, recofile, imgfile]))
     error("Input directory must contain the files: " *
-          "method, acqp, pdata/1/reco, pdata/1/2dseq")
+          "method, acqp, pdata/" * string(reco) * "/reco, pdata/" *
+                                   string(reco) * "/2dseq")
   end
 
   mri = MRI(Array{Float32, 4}(undef, (0, 0, 0, 0)))
@@ -1045,7 +1057,7 @@ end
 
 
 """
-    load_mgh(fname::String, slices::Union{Vector{Unsigned}, Nothing}=nothing, frames::Union{Vector{Unsigned}, Nothing}=nothing, headeronly::Bool=false)
+    load_mgh(fname::String; slices::Union{Vector{Unsigned}, Nothing}=nothing, frames::Union{Vector{Unsigned}, Nothing}=nothing, headeronly::Bool=false)
 
 Load a .mgh or .mgz file from disk.
 
@@ -1069,7 +1081,7 @@ Return:
 
 - `headeronly::Bool=false`: If true, the pixel data are not read in.
 """
-function load_mgh(fname::String, slices::Union{Vector{Unsigned}, Nothing}=nothing, frames::Union{Vector{Unsigned}, Nothing}=nothing, headeronly::Bool=false)
+function load_mgh(fname::String; slices::Union{Vector{Unsigned}, Nothing}=nothing, frames::Union{Vector{Unsigned}, Nothing}=nothing, headeronly::Bool=false)
 
   vol = M = mr_parms = volsz = []
 
@@ -1411,7 +1423,7 @@ end
 
 
 """
-    load_nifti(fname::String, hdronly::Bool=false) -> NIfTIheader, Array
+    load_nifti(fname::Stringr; headeronly::Bool=false) -> NIfTIheader, Array
 
 Load a NIfTI (.nii or .nii.gz) volume from disk and return an array containing
 the image data and a `NIfTIheader` structure and the image data as an array.
@@ -1425,7 +1437,7 @@ The output `NIfTIheader` structure contains:
 - the vox2ras matrix, which is the sform (if valid), otherwise the qform, in
   the .vox2ras field
 """
-function load_nifti(fname::String, hdronly::Bool=false)
+function load_nifti(fname::String; headeronly::Bool=false)
 
   # Unzip if it is compressed 
   ext = lowercase(fname[(end-1):end])
@@ -1458,7 +1470,7 @@ function load_nifti(fname::String, hdronly::Bool=false)
   end
 
   # If only header is desired, return now
-  if hdronly
+  if headeronly
     if gzipped		# Clean up
       cmd = `rm -f $tmpfile`
       run(cmd)
@@ -2038,13 +2050,13 @@ function mri_read_bfiles(infile1::String, infile2::String)
   tab = []
 
   for infile in (infile1, infile2)
-    if ~isfile(infile)
+    if !isfile(infile)
       error("Could not open " * infile)
     end
 
     push!(tab, readdlm(infile))
 
-    if ~all(isa.(tab[end], Number))
+    if !all(isa.(tab[end], Number))
       error("File " * infile * " contains non-numeric entries")
     end
 
@@ -2113,12 +2125,12 @@ end
 
 
 """
-    mri_read(inbase::String, type::DataType, headeronly::Bool=false, permuteflag::Bool=false)
+    mri_read(inbase::String, type::DataType, headeronly::Bool=false, permutedata::Bool=false)
 
 Read a set of image files with base name `inbase`, which were generated by
 an analysis, into a struct of a custom type (e.g., `DTI`)
 """
-function mri_read(inbase::String, type::DataType, headeronly::Bool=false, permuteflag::Bool=false)
+function mri_read(inbase::String, type::DataType, headeronly::Bool=false, permutedata::Bool=false)
 
   if !isstructtype(type)
     error("Type " * type * " is not a structure")
@@ -2134,11 +2146,11 @@ function mri_read(inbase::String, type::DataType, headeronly::Bool=false, permut
 
     if ftype == MRI
       infile = absbase * "_" * string(var) * ".nii.gz"
-      push!(inputs, mri_read(infile, headeronly, permuteflag))
+      push!(inputs, mri_read(infile, headeronly, permutedata))
     elseif ftype == Vector{MRI}
       inpat = Regex("^" * absbase * "_" * string(var) * "[0-9]*.nii.gz\$")
       infiles = flist[.!isnothing.(match.(inpat, flist))]
-      push!(inputs, mri_read.(infiles, headeronly, permuteflag))
+      push!(inputs, mri_read.(infiles, headeronly, permutedata))
     else
       infile = absbase * "_" * string(var) * ".txt"
       mat = Float32.(readdlm(infile))
