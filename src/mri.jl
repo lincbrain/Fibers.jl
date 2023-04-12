@@ -849,19 +849,19 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
     if startswith(ln, "##\$PVM_SpatResol=")		# Voxel size
       ln = readline(io)
-      ln = split(ln)
-      mri.volres = parse.(Float32, ln)
+      words = split(ln)
+      mri.volres = parse.(Float32, words)
     elseif startswith(ln, "##\$PVM_Matrix=")		# Matrix size
       ln = readline(io)
-      ln = split(ln)
-      mri.volsize = parse.(Float32, ln)
+      words = split(ln)
+      mri.volsize = parse.(Float32, words)
     elseif startswith(ln, "##\$PVM_SliceThick=")	# Slice thickness (2D)
       ln = split(ln, "=")[2]
       slicethick = parse(Float32, ln)
     elseif startswith(ln, "##\$PVM_SPackArrNSlices=")	# Number of slices (2D)
       ln = readline(io)
-      ln = split(ln)
-      nslice = sum(parse.(Float32, ln))
+      words = split(ln)
+      nslice = sum(parse.(Float32, words))
     elseif startswith(ln, "##\$EchoTime=")		# TE
       ln = split(ln, "=")[2]
       mri.te = parse(Float32, ln)
@@ -872,41 +872,41 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
       ln = split(ln, "=")[2]
       nb0 = parse(Int64, ln)
     elseif startswith(ln, "##\$PVM_DwDir=")		# Diffusion gradients
-      nval = split(ln, "(")[2]
-      nval = split(nval, ")")[1]
-      nval = split(nval, ",")
-      nval = prod(parse.(Int64, nval))
+      ln = split(ln, "(")[2]
+      ln = split(ln, ")")[1]
+      words = split(ln, ",")
+      nval = prod(parse.(Int64, words))
 
       nread = 0
       bvec = Vector{Float32}(undef, 0)
 
       while nread < nval
         ln = readline(io)
-        ln = split(ln)
+        words = split(ln)
 
-        nread += length(ln)
-	push!(bvec, parse.(Float32, ln)...)
+        nread += length(words)
+	push!(bvec, parse.(Float32, words)...)
       end
 
       mri.bvec = permutedims(reshape(bvec, 3, :), [2 1])
 
       # Normalize gradient vectors
-      mri.bvec = mri.bvec ./ sqrt.(sum(mri.bvec.^2, dims=2))
+      mri.bvec .= mri.bvec ./ sqrt.(sum(mri.bvec.^2, dims=2))
       mri.bvec[isnan.(mri.bvec)] .= Float32(0)
     elseif startswith(ln, "##\$PVM_DwEffBval=")		# b-values
-      nval = split(ln, "(")[2]
-      nval = split(nval, ")")[1]
-      nval = parse(Int64, nval)
+      ln = split(ln, "(")[2]
+      ln = split(ln, ")")[1]
+      nval = parse(Int64, ln)
 
       nread = 0
       bval = Vector{Float32}(undef, 0)
 
       while nread < nval
         ln = readline(io)
-        ln = split(ln)
+        words = split(ln)
         
-        nread += length(ln)
-	push!(bval, parse.(Float32, ln)...)
+        nread += length(words)
+	push!(bval, parse.(Float32, words)...)
       end
 
       mri.bval = bval
@@ -950,6 +950,7 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   # Read information about image binary data from Bruker reco file
   io = open(recofile, "r")
 
+  iscomplex = false
   data_type = Int32
   int_offset = Vector{Float32}(undef, 0)
   int_slope = Vector{Float32}(undef, 0)
@@ -958,43 +959,51 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   while !eof(io)
     ln = readline(io)
 
-    if startswith(ln, "##\$RECO_wordtype=")		# Bytes per voxel
+    if startswith(ln, "##\$RECO_image_type=")		# Complex, real, etc.
       ln = split(ln, "=")[2]
 
-      if ln == "_32BIT_SGN_INT"
+      if ln == "COMPLEX_IMAGE"
+        iscomplex = true
+      end
+    elseif startswith(ln, "##\$RECO_wordtype=")		# Bytes per voxel
+      ln = split(ln, "=")[2]
+
+      if ln == "_32BIT_FLOAT"
+        data_type = Float32
+      elseif ln == "_32BIT_SGN_INT"
         data_type = Int32
       elseif ln == "_16BIT_SGN_INT"
         data_type = Int16
-      elseif ln == "_8BIT_SGN_INT"
-        data_type = Int8
+      elseif ln == "_8BIT_UNSGN_INT"
+        data_type = UInt8
       end
     elseif startswith(ln, "##\$RECO_map_offset=")	# Intensity offset
-      nval = split(ln, "(")[2]
-      nval = split(nval, ")")[1]
-      nval = parse(Int64, nval)
+      ln = split(ln, "(")[2]
+      ln = split(ln, ")")[1]
+      nval = parse(Int64, ln)
 
       nread = 0
 
       while nread < nval
         ln = readline(io)
-        ln = split(ln)
+        words = split(ln)
 
-        nread += length(ln)
-        push!(int_offset, parse.(Float32, ln)...)
+        nread += length(words)
+        push!(int_offset, parse.(Float32, words)...)
       end
     elseif startswith(ln, "##\$RECO_map_slope")		# Intensity slope
-      nval = split(ln, "(")[2]
-      nval = split(nval, ")")[1]
-      nval = parse(Int64, nval)
+      ln = split(ln, "(")[2]
+      ln = split(ln, ")")[1]
+      nval = parse(Int64, ln)
 
       nread = 0
 
       while nread < nval
         ln = readline(io)
-        ln = split(ln)
+        words = split(ln)
 
-        nread += length(ln)
-        push!(int_slope, parse.(Float32, ln)...)
+        nread += length(words)
+        push!(int_slope, parse.(Float32, words)...)
       end
     elseif startswith(ln, "##\$RECO_byte_order=")	# Byte order
       byte_order = split(ln, "=")[2]
@@ -1002,6 +1011,11 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   end
 
   close(io)
+
+  if iscomplex		# Real and imaginary frames share the same slope/offset
+    append!(int_slope, int_slope)
+    append!(int_offset, int_offset)
+  end
 
   mri.nframes = is2d ? length(int_slope) ÷ nslice : length(int_slope)
 
@@ -1019,38 +1033,38 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   close(io)
 
   if byte_order == "littleEndian"
-    vol = ltoh.(vol)
+    vol .= ltoh.(vol)
   else
-    vol = ntoh.(vol)
+    vol .= ntoh.(vol)
   end
 
   # Apply intensity offset and slope
-  vol = Int32.(vol)
-
   if data_type == Float32
-    mri.vol = Float32.(vol)
+    mri.vol = vol
   else
     mri.vol = Array{Float32}(undef, size(vol))
+
+    vol32 = Int32.(vol)
 
     if is2d	# One slope/offset per slice
       k = 1
       for iframe in 1:mri.nframes
         for islice in 1:mri.volsize[3]
-          mri.vol[:,:,islice,iframe] = vol[:,:,islice,iframe] ./ int_slope[k] .+
-                                                                 int_offset[k]
+          @views mri.vol[:,:,islice,iframe] .=
+                   vol32[:,:,islice,iframe] ./ int_slope[k] .+ int_offset[k]
           k += 1
         end
       end
     else	# One slope/offset per volume
       for iframe in 1:mri.nframes
-        mri.vol[:,:,:,iframe] = vol[:,:,:,iframe] ./ int_slope[iframe] .+
-                                                     int_offset[iframe]
+        @views mri.vol[:,:,:,iframe] .=
+                 vol32[:,:,:,iframe] ./ int_slope[iframe] .+ int_offset[iframe]
       end
     end
   end
 
   # Normalize by receiver gain
-  mri.vol = mri.vol / gain
+  mri.vol .= mri.vol ./ gain
   
   return mri
 end
