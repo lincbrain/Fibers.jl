@@ -2047,25 +2047,39 @@ matrix of size (n, 3).
 """
 function mri_read_bfiles(infile1::String, infile2::String)
 
-  tab = []
+  tab = Vector{Matrix{Float32}}(undef, 0)
 
   for infile in (infile1, infile2)
     if !isfile(infile)
       error("Could not open " * infile)
     end
 
-    push!(tab, readdlm(infile))
+    push!(tab, readdlm(infile, Float32))
 
     if !all(isa.(tab[end], Number))
       error("File " * infile * " contains non-numeric entries")
     end
+  end
 
-    if size(tab[end], 2) > size(tab[end], 1)
-      tab[end] = permutedims(tab[end], [2,1])
+  ival, ivec = (length(tab[1]) < length(tab[2])) ? (1, 2) : (2, 1)
+
+  # Convert b-value table to single column
+  if size(tab[ival], 2) != 1
+    if size(tab[ival, 1]) != 1
+      error("Wrong format in table " * (ival == 1 ? infile1 : infile2) *
+            " (should be single column or row)")
+    else
+      tab[ival] = permutedims(tab[ival], [2,1])
     end
+  end
 
-    if size(tab[end], 2) == 1
-      tab[end] = tab[end][:,1]
+  # Convert gradient table to three columns
+  if size(tab[ivec], 2) != 3
+    if size(tab[ivec, 1]) != 3
+      error("Wrong format in table " * (ivec == 1 ? infile1 : infile2) *
+            " (should be three columns or rows)")
+    else
+      tab[ivec] = permutedims(tab[ivec], [2,1])
     end
   end
 
@@ -2075,13 +2089,11 @@ function mri_read_bfiles(infile1::String, infile2::String)
           infile2 * " " * string(size(tab[2])))
   end
 
-  if (size(tab[1], 2) == 1 && size(tab[2], 2) == 3) ||
-     (size(tab[1], 2) == 3 && size(tab[2], 2) == 1)
-    return tab[1], tab[2]
+  # Return b-value table as vector and gradient table as matrix
+  if ival == 1
+    return tab[1][:,1], tab[2]
   else
-    error("Wrong number of entries in tables " * 
-          infile1 * " " * string(size(tab[1])) * " and " *
-          infile2 * " " * string(size(tab[2])))
+    return tab[1], tab[2][:,1]
   end
 end
 
