@@ -650,21 +650,22 @@ function mri_read(infile::String; headeronly::Bool=false, permutedata::Bool=fals
       mri.volsize = volsz[1:3]
       mri.nframes = length(volsz) < 4 ? 1 : volsz[4]
     elseif any(fext .== ["nii", "nii.gz"])		#------- NIfTI -------#
-      if headeronly
-        hdr = load_nifti(fname; headeronly=headeronly)
-      else
-        hdr, vol = load_nifti(fname; headeronly=headeronly)
+      hdr, vol = load_nifti(fname; headeronly=headeronly)
 
-        isempty(vol) && error("Loading " * fname * " as NIfTI")
+      if !headeronly && isempty(vol)
+        error("Loading " * fname * " as NIfTI")
       end
 
       # Compatibility with MRIread.m:
       # When data have > 4 dims, put all data into dim 4.
       volsz = Int.(hdr.dim[2:end])
       volsz = volsz[findall(volsz.>0)]
-      if !headeronly
-        if length(volsz) < 5
-          mri = MRI(vol)
+
+      if length(volsz) < 5
+        mri = MRI(vol)
+      else
+        if headeronly
+          mri = MRI(Array{eltype(vol), 4}(undef, 0, 0, 0, 0))
         else
           mri = MRI(reshape(vol, volsz[1], volsz[2], volsz[3], :))
         end
@@ -717,7 +718,7 @@ function mri_read(infile::String; headeronly::Bool=false, permutedata::Bool=fals
         mri.bvec = g
 
         # Normalize gradient vectors
-        mri.bvec = mri.bvec ./ sqrt.(sum(mri.bvec.^2, dims=2))
+        mri.bvec .= mri.bvec ./ sqrt.(sum(mri.bvec.^2, dims=2))
         mri.bvec[isnan.(mri.bvec)] .= Float32(0)
       end
     end
@@ -1097,7 +1098,10 @@ Return:
 """
 function load_mgh(fname::String; slices::Union{Vector{Unsigned}, Nothing}=nothing, frames::Union{Vector{Unsigned}, Nothing}=nothing, headeronly::Bool=false)
 
-  vol = M = mr_parms = volsz = []
+  vol = Array{Float32, 4}(undef, 0, 0, 0, 0)
+  M = Matrix{Float32}(undef, 0, 0)
+  mr_parms = Vector{Float32}(undef, 0)
+  volsz = Matrix{Int32}(undef, 0, 0)
 
   # Unzip if it is compressed
   ext = lowercase(fname[(end-1):end])
@@ -1150,7 +1154,7 @@ function load_mgh(fname::String; slices::Union{Vector{Unsigned}, Nothing}=nothin
 
     D = Diagonal(delta)
 
-    Pcrs_c = [ndim1; ndim2; ndim3]/2	# Should this be kept?
+    Pcrs_c = Float32.([ndim1; ndim2; ndim3])/2	# Should this be kept?
 
     Pxyz_0 = Pxyz_c - Mdc*D*Pcrs_c
 
@@ -1217,10 +1221,10 @@ function load_mgh(fname::String; slices::Union{Vector{Unsigned}, Nothing}=nothin
     vol = zeros(dtype, ndim1, ndim2, length(slices), length(frames))
 
     for iframe in 1:length(frames)
-      frame = frames(iframe)
+      frame = frames[iframe]
 
       for islice in 1:length(slices)
-        slice = slices(islice)
+        slice = slices[islice]
 
         filepos = ((frame-1)*nvvol + (slice-1)*nvslice)*nbytespervox + filepos0
         seek(io, filepos)
@@ -1475,32 +1479,10 @@ function load_nifti(fname::String; headeronly::Bool=false)
   # Read NIfTI header
   hdr = load_nifti_hdr(tmpfile)
 
-  if isempty(hdr.vox2ras)
-    if gzipped		# Clean up
-      cmd = `rm -f $tmpfile`
-      run(cmd)
-    end
-    return hdr
-  end
-
-  # If only header is desired, return now
-  if headeronly
-    if gzipped		# Clean up
-      cmd = `rm -f $tmpfile`
-      run(cmd)
-    end
-    return hdr
-  end
-
   # Get volume dimensions
   dim = hdr.dim[2:findlast(hdr.dim .!= 0)]
 
-  # Open to read the pixel data
-  io = open(tmpfile, "r")
-
-  # Get past the header
-  seek(io, Int64(round(hdr.vox_offset)))
-
+  # Get data type
   if hdr.datatype == 2
     dtype = UInt8
   elseif hdr.datatype == 4
@@ -1525,6 +1507,23 @@ function load_nifti(fname::String; headeronly::Bool=false)
     end
     error("Data type " * string(hdr.datatype) * " not supported")
   end
+
+  vol = Array{dtype, length(dim)}(undef, zeros(Int, length(dim))...)
+
+  # If only header is desired or if there is no vox2ras, return now
+  if headeronly || isempty(hdr.vox2ras)
+    if gzipped		# Clean up
+      cmd = `rm -f $tmpfile`
+      run(cmd)
+    end
+    return hdr, vol
+  end
+
+  # Open to read the pixel data
+  io = open(tmpfile, "r")
+
+  # Get past the header
+  seek(io, Int64(round(hdr.vox_offset)))
 
   vol = read!(io, Array{dtype}(undef, dim))
 
