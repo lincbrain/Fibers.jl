@@ -92,6 +92,7 @@ end
 mutable struct MRI{A<:AbstractArray}
   vol::A
   ispermuted::Bool
+  image_type::String
   niftihdr::NIfTIheader
 
   fspec::String
@@ -149,6 +150,7 @@ Return an empty `MRI` structure
 MRI(vol::Array{T}) where T<:Number = MRI(
   vol,
   false,
+  "",
   NIfTIheader(Int32(0),
               Tuple(zeros(UInt8, 10)),
               Tuple(zeros(UInt8, 18)),
@@ -250,7 +252,7 @@ MRI(vol::Array{T}) where T<:Number = MRI(
     MRI(ref::MRI{A}, nframes::Integer=ref.nframes, datatype::DataType=eltype(A)) where A<:AbstractArray
 
 Return an `MRI` structure whose header fields are populated based on a
-reference `MRI` structure `ref`, and whose image array are populated with
+reference `MRI` structure `ref`, and whose image array is populated with
 zeros.
 
 Optionally, the new `MRI` structure can be created with a different number of
@@ -825,6 +827,7 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   methfile = dname * "/method" 
   acqpfile = dname * "/acqp" 
   recofile = dname * "/pdata/" * string(reco) * "/reco"
+  visufile = dname * "/pdata/" * string(reco) * "/visu_pars"
   imgfile  = dname * "/pdata/" * string(reco) * "/2dseq"
 
   if any(.!isfile.([methfile, acqpfile, recofile, imgfile]))
@@ -951,7 +954,7 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   # Read information about image binary data from Bruker reco file
   io = open(recofile, "r")
 
-  iscomplex = false
+  image_type = ""
   data_type = Int32
   int_offset = Vector{Float32}(undef, 0)
   int_slope = Vector{Float32}(undef, 0)
@@ -961,11 +964,7 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
     ln = readline(io)
 
     if startswith(ln, "##\$RECO_image_type=")		# Complex, real, etc.
-      ln = split(ln, "=")[2]
-
-      if ln == "COMPLEX_IMAGE"
-        iscomplex = true
-      end
+      image_type = split(ln, "=")[2]
     elseif startswith(ln, "##\$RECO_wordtype=")		# Bytes per voxel
       ln = split(ln, "=")[2]
 
@@ -1013,10 +1012,13 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
   close(io)
 
-  if iscomplex		# Real and imaginary frames share the same slope/offset
+  if image_type == "COMPLEX_IMAGE"
+    # Real and imaginary frames share the same slope/offset
     append!(int_slope, int_slope)
     append!(int_offset, int_offset)
   end
+
+  mri.image_type = image_type
 
   mri.nframes = is2d ? length(int_slope) ÷ nslice : length(int_slope)
 
@@ -1024,6 +1026,24 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
   if headeronly
     return mri
+  end
+
+  # Read image units (if any)
+  data_units = ""
+
+  if isfile(visufile)
+    io = open(visufile, "r")
+
+    while !eof(io)
+      ln = readline(io)
+
+      if startswith(ln, "##\$VisuCoreDataUnits=")	# Image units
+        ln = readline(io)
+        data_units = replace(ln, "<"=>"", ">"=>"")
+      end
+    end
+
+    close(io)
   end
 
   # Read image data
@@ -1045,28 +1065,29 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   else
     mri.vol = Array{Float32}(undef, size(vol))
 
-    vol32 = Int32.(vol)
-
     if is2d	# One slope/offset per slice
       k = 1
       for iframe in 1:mri.nframes
         for islice in 1:mri.volsize[3]
           @views mri.vol[:,:,islice,iframe] .=
-                   vol32[:,:,islice,iframe] ./ int_slope[k] .+ int_offset[k]
+              Int32.(vol[:,:,islice,iframe]) ./ int_slope[k] .+ int_offset[k]
           k += 1
         end
       end
     else	# One slope/offset per volume
       for iframe in 1:mri.nframes
         @views mri.vol[:,:,:,iframe] .=
-                 vol32[:,:,:,iframe] ./ int_slope[iframe] .+ int_offset[iframe]
+            Int32.(vol[:,:,:,iframe]) ./ int_slope[iframe] .+ int_offset[iframe]
       end
     end
   end
 
-  # Normalize by receiver gain
-  mri.vol .= mri.vol ./ gain
-  
+  # If it is a magnitude or complex image and it is unitless, normalize it 
+  # by the receiver gain (this is useful, e.g., for combining DWI scans)
+  if image_type != "PHASE_IMAGE" && isempty(data_units)
+    mri.vol ./= gain
+  end
+
   return mri
 end
 
