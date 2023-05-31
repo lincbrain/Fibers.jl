@@ -2099,7 +2099,7 @@ function mri_read_bfiles(infile1::String, infile2::String)
 
   # Convert b-value table to single column
   if size(tab[ival], 2) != 1
-    if size(tab[ival, 1]) != 1
+    if size(tab[ival], 1) != 1
       error("Wrong format in table " * (ival == 1 ? infile1 : infile2) *
             " (should be single column or row)")
     else
@@ -2109,7 +2109,7 @@ function mri_read_bfiles(infile1::String, infile2::String)
 
   # Convert gradient table to three columns
   if size(tab[ivec], 2) != 3
-    if size(tab[ivec, 1]) != 3
+    if size(tab[ivec], 1) != 3
       error("Wrong format in table " * (ivec == 1 ? infile1 : infile2) *
             " (should be three columns or rows)")
     else
