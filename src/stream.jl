@@ -12,9 +12,10 @@
   Reporting: freesurfer@nmr.mgh.harvard.edu
 =#
  
-using LinearAlgebra, Distributions
+using LinearAlgebra, Distributions, OffsetArrays
 
-export stream, stream_new_line, stream_new_point!
+export StreamWork, stream, stream_new_line,
+       stream_new_point!, stream_micro_new_point!
 
 """
     StreamWork{T}
@@ -27,20 +28,22 @@ Pre-allocated workspace for streamline tractography
 - `cosang_thresh::T` : Cosine of maximum bending angle (default: cosd(45))
 - `step_size::T`     : Step length, in voxels (default: .5 voxel)
 - `smooth_coeff::T`  : Vector smoothing coefficient, in [0-1] (default: .2)
+- `micro_search_cosang::T`         : Cosine of search angle (default: cosd(10))
+- `micro_search_dist::Vector{Int}` : Search distance, in voxels (default: 15)
 - `strdims::Vector{Int}`  : In-plane dimensions for 2D LCM [2]
 - `dxyz::Matrix{Int}`     : Coordinate increments for voxel jumps in LCM [3 4]
 - `edgetype::Matrix{Int}` : Voxel edges connected by i-th LCM element [2 10]
-- `mask::BitArray{3}`            : Brain mask [nx ny nz]
-- `peak::Array{Vector{T}, 4}`    : ODF peak vectors [npeak nx ny nz][3]
+- `mask::BitArray{3}`            : Brain mask (voxel-wise) [nx ny nz]
+- `ovecs::Array{T, 5}`           : Orientation vectors [3 nvec nx ny nz]
 - `lcms::Array{T, 4}`            : LCM elements [nmat nx ny nz]
 - `sublist::Vector{Vector{T}}`   : Subvoxel sampling offsets [nsub][3]
 - `pos_now::Vector{Vector{T}}`   : Current (x, y, z) position [ncore][3]
 - `vec_now::Vector{Vector{T}}`   : Current orientation vector [ncore][3]
 - `pos_next::Vector{Vector{T}}`  : Next (x, y, z) position [ncore][3]
 - `vec_next::Vector{Vector{T}}`  : Next orientation vector [ncore][3]
-- `ipeak_next::Vector{Int}`      : Index of next orientation vector [ncore]
-- `cosang::Vector{Vector{T}}`    : Cosine of angle b/w vectors [ncore][npeak]
-- `cosangabs::Vector{Vector{T}}` : Absolute value of above [ncore][npeak]
+- `ivec_next::Vector{Int}`       : Index of next orientation vector [ncore]
+- `cosang::Vector{Vector{T}}`    : Cosine of angle b/w vectors [ncore][nvec]
+- `cosangabs::Vector{Vector{T}}` : Absolute value of above [ncore][nvec]
 - `dvox::Vector{Vector{Int}}`    : Change in voxel position [ncore][3]
 - `lcm::Vector{Vector{T}}`       : LCM vector at single voxel [ncore][10]
 - `isdiff::Vector{Bool}`         : Indicator of method difference [ncore]
@@ -53,47 +56,66 @@ struct StreamWork{T}
   cosang_thresh::T
   step_size::T
   smooth_coeff::T
+  micro_search_cosang::T
+  micro_search_dist::Vector{Int}
   strdims::Vector{Int}
   dxyz::Matrix{Int}
   edgetype::Matrix{Int}
   mask::BitArray{3}
-  peak::Array{Vector{T}, 4}
+  ovecs::Array{T, 5}
+  search_area::Array{Vector{T}, 3}
   lcms::Array{T, 4}
   sublist::Vector{Vector{T}}
   pos_now::Vector{Vector{T}}
   vec_now::Vector{Vector{T}}
   pos_next::Vector{Vector{T}}
   vec_next::Vector{Vector{T}}
-  ipeak_next::Vector{Int}
+  ivec_next::Vector{Int}
   cosang::Vector{Vector{T}}
   cosangabs::Vector{Vector{T}}
+  cosang_area::Vector{Array{T, 3}}
+  cosangabs_area::Vector{Array{T, 3}}
   dvox::Vector{Vector{Int}}
   lcm::Vector{Vector{T}}
   isdiff::Vector{Bool}
   str::Vector{Vector{Matrix{T}}}
   flag::Vector{Vector{Vector{Bool}}}
 
-  function StreamWork(peak_mri::Vector{MRI}, f_mri::Union{Vector{MRI},Nothing}=nothing, fa_mri::Union{MRI,Nothing}=nothing, mask_mri::Union{MRI,Nothing}=nothing, lcms_mri::Union{MRI,Nothing}=nothing, nsub::Integer=1, len_min::Integer=3, len_max::Integer=maximum(peak_mri.volsize), ang_thresh::Real=45, f_thresh::Real=.03, fa_thresh::Real=.1, lcm_thresh::Real=.099, step_size::Real=.5, smooth_coeff::Real=.2, verbose::Bool=false, T::DataType=Float32)
+  function StreamWork(ovec::Union{MRI,Vector{MRI}}, T::DataType=Float32; f::Union{MRI,Vector{MRI},Nothing}=nothing, f_thresh::Real=.03, fa::Union{MRI,Nothing}=nothing, fa_thresh::Real=.1, mask::Union{MRI,Nothing}=nothing, nsub::Union{Integer,Nothing}=3, len_min::Integer=3, len_max::Integer=(isa(ovec,MRI) ? maximum(ovec.volsize) : maximum(ovec[1].volsize)), ang_thresh::Union{Real,Nothing}=45, step_size::Union{Real,Nothing}=.5, smooth_coeff::Union{Real,Nothing}=.2, search_dist::Integer=15, search_ang::Real=10, lcms::Union{MRI,Nothing}=nothing, lcm_thresh::Real=.099, verbose::Bool=false)
 
-    npeak = length(peak_mri)
-    nx, ny, nz = size(peak_mri[1].vol)
+    ovecs = isa(ovec, MRI) ? Vector{MRI}([ovec]) : ovec
+    fs    = isa(f, MRI)    ? Vector{MRI}([f])    : f
+
+    nvec = length(ovecs)
+    nx, ny, nz = size(ovecs[1].vol)
     nxyz = nx * ny * nz
 
-    # Generate brain mask array
-    if isnothing(mask_mri)
-      mask = falses(nx, ny, nz)
+    # Is this in the microscopy regime (min voxel size under 50 μm)?
+    domicro = (minimum(ovecs[1].volres) <= 0.05)
 
-      for ipeak in eachindex(peak_mri)
-        mask .= mask .|| any(x -> x!=0, peak_mri[ipeak].vol, dims=4)
+    micro_search_dist = domicro ? fill(Int(search_dist), 3) : Int[]
+
+    # Set defaults that depend on which scale we are operating in
+    isnothing(nsub)         && (nsub         = Integer(domicro ? 0 : 3))
+    isnothing(ang_thresh)   && (ang_thresh   = T(domicro ? 20 : 45))
+    isnothing(step_size)    && (step_size    = T(domicro ? 1 : .5))
+    isnothing(smooth_coeff) && (smooth_coeff = T(domicro ? 0 : .2))
+
+    # Generate brain mask array
+    if isnothing(mask)
+      mask_array = falses(nx, ny, nz)
+
+      for ivec in eachindex(ovecs)
+        mask_array .= mask_array .|| any(x -> x!=0, ovecs[ivec].vol, dims=4)
       end
     else
-      @views mask = (mask_mri.vol[:,:,:,1] .> 0)
+      @views mask_array = (mask.vol[:,:,:,1] .> 0)
     end
 
-    if !isnothing(fa_mri)
-      # Warn if threshold seems unreasonable
-      fa_min = quantile(fa_mri.vol[vec(mask)], 1e-5)
-      fa_max = quantile(fa_mri.vol[vec(mask)], .9)
+    if !isnothing(fa)
+      # Warn if voxel-wise threshold seems unreasonable
+      fa_min = quantile(fa.vol[vec(mask_array)], 1e-5)
+      fa_max = quantile(fa.vol[vec(mask_array)], .9)
       if fa_thresh < fa_min || fa_thresh > fa_max
         println("WARNING: The value of fa_thresh (" * string(fa_thresh) *
                 ") is outside the range of most values in the fa volume (" *
@@ -101,36 +123,64 @@ struct StreamWork{T}
       end
 
       # Intersect brain mask with fa.vol >=fa_thresh
-      @views mask .= mask .&& (fa_mri.vol[:,:,:,1] .>= T(fa_thresh))
+      @views mask_array .= mask_array .&& (fa.vol[:,:,:,1] .>= T(fa_thresh))
     end
 
-    # Store peak vectors for fast computation
-    peak = fill(zeros(T, 3), npeak, nx, ny, nz)
-    for ipeak = 1:npeak
-      if isnothing(f_mri)
-        ind_mask = findall(vec(mask) .> 0)
-      else
-        if ipeak == 1
-          # Warn if threshold seems unreasonable
-          f_min = quantile(f_mri[1].vol[vec(mask)], 1e-5)
-          f_max = quantile(f_mri[1].vol[vec(mask)], .9)
-          if f_thresh < f_min || f_thresh > f_max
-            println("WARNING: The value of f_thresh (" * string(f_thresh) *
-                    ") is outside the range of most values in the f volume (" *
-                    string(f_min) * ", " * string(f_max) * ")")
-          end
-        end
+    if !isnothing(f)
+      # Warn if peak-wise threshold seems unreasonable
+      f_min = quantile(fs[1].vol[vec(mask_array)], 1e-5)
+      f_max = quantile(fs[1].vol[vec(mask_array)], .9)
+      if f_thresh < f_min || f_thresh > f_max
+        println("WARNING: The value of f_thresh (" * string(f_thresh) *
+                ") is outside the range of most values in the f volume (" *
+                string(f_min) * ", " * string(f_max) * ")")
+      end
+    end
 
-        # Intersect brain mask with f[ipeak].vol >= f_thresh
-        ind_mask = findall(vec(mask) .> 0 
-                           .&& vec(f_mri[ipeak].vol) .>= T(f_thresh))
+    # Store orientation vectors for fast computation
+    ovec_array  = zeros(T, 3, nvec, nx, ny, nz)
+
+    omask_array = isnothing(f) ? mask_array : similar(mask_array)
+
+    for ivec in eachindex(ovecs)
+      if !isnothing(f)
+        # Intersect brain mask_array with fs[ivec].vol >= f_thresh
+        omask_array .= mask_array .&& fs[ivec].vol .>= T(f_thresh)
       end
 
-      peak[ipeak .+ (ind_mask.-1).*npeak] .=
-        mapslices(x -> [x],
-                  reshape(peak_mri[ipeak].vol, nxyz, :)[ind_mask, :], dims=2)
+      if size(ovecs[ivec].vol, 4) == 3		# Input is orientation vectors
+        for idim in axes(ovecs[ivec].vol, 4) 
+          ovec_array[idim, ivec, :, :, :] .= view(ovecs[ivec].vol,
+                                                  :, :, :, idim) .* omask_array
+        end
+        # TODO: check if vectors are normalized?
+      elseif size(ovecs[ivec].vol, 4) == 1	# Input is 2D orientation angles
+        # Through-plane dimension (assume it is the one with max voxel size)
+        thrudim = argmax(ovecs[ivec].volres)
+        # In-plane dimensions
+        strdims = setdiff(1:3, thrudim)
+
+        if domicro
+          micro_search_dist[thrudim] = 0
+        end
+
+        if -π/2-eps(T) <= minimum(ovecs[ivec].vol) && 
+            maximum(ovecs[ivec].vol) <= π/2+eps(T)		# In radians
+          ovec_array[strdims[1], ivec, :, :, :] .= cos.(ovecs[ivec].vol) .*
+                                                   omask_array
+          ovec_array[strdims[2], ivec, :, :, :] .= sin.(ovecs[ivec].vol) .*
+                                                   omask_array
+        elseif -90 <= minimum(ovecs[ivec].vol) && 
+                      maximum(ovecs[ivec].vol) <= 90		# In degrees
+          ovec_array[strdims[1], ivec, :, :, :] .= cosd.(ovecs[ivec].vol) .*
+                                                   omask_array
+          ovec_array[strdims[2], ivec, :, :, :] .= sind.(ovecs[ivec].vol) .*
+                                                   omask_array
+        else
+          error("Input orientations should be 3D vectors or angles ∊ [-90, 90]")
+        end
+      end
     end
-    # TODO: check if vectors are normalized?
 
     # Subvoxel sampling
     if nsub > 0
@@ -145,9 +195,9 @@ struct StreamWork{T}
     vec_now      = [zeros(T, 3) for tid in 1:Threads.nthreads()]
     pos_next     = [zeros(T, 3) for tid in 1:Threads.nthreads()]
     vec_next     = [zeros(T, 3) for tid in 1:Threads.nthreads()]
-    ipeak_next   = Vector{Int}(undef, Threads.nthreads())
-    cosang       = [zeros(T, npeak) for tid in 1:Threads.nthreads()]
-    cosangabs    = [zeros(T, npeak) for tid in 1:Threads.nthreads()]
+    ivec_next    = Vector{Int}(undef, Threads.nthreads())
+    cosang       = [zeros(T, nvec) for tid in 1:Threads.nthreads()]
+    cosangabs    = [zeros(T, nvec) for tid in 1:Threads.nthreads()]
 
     # Max bending angle
     cosang_thresh = cosd(T(ang_thresh))
@@ -157,19 +207,19 @@ struct StreamWork{T}
     # ...
 
     # Local connection matrices
-    if isnothing(lcms_mri)
-      lcms       = Array{T, 4}(undef, 0, 0, 0, 0)
-      strdims    = Vector{Int}(undef, 0)
-      dxyz       = Matrix{Int}(undef, 0, 0)
-      edgetype   = Matrix{Int}(undef, 0, 0)
-      dvox       = Vector{Vector{Int}}(undef, 0)
-      lcm        = Vector{Vector{T}}(undef, 0)
-      isdiff     = Vector{Bool}(undef, 0)
+    if isnothing(lcms)
+      lcm_array = Array{T, 4}(undef, 0, 0, 0, 0)
+      strdims   = Vector{Int}(undef, 0)
+      dxyz      = Matrix{Int}(undef, 0, 0)
+      edgetype  = Matrix{Int}(undef, 0, 0)
+      dvox      = Vector{Vector{Int}}(undef, 0)
+      lcm       = Vector{Vector{T}}(undef, 0)
+      isdiff    = Vector{Bool}(undef, 0)
     else
-      lcms = permutedims(lcms_mri.vol, (4, 1, 2, 3))
+      lcm_array = permutedims(lcms.vol, (4, 1, 2, 3))
 
       # Warn if threshold seems unreasonable
-      lcm_max = maximum(lcms_mri.vol)
+      lcm_max = maximum(lcms.vol)
       if lcm_thresh > lcm_max
         println("WARNING: The value of lcm_thresh (" * string(lcm_thresh) *
                 ") is greater than the maximum value in the lcms volume (" *
@@ -177,11 +227,11 @@ struct StreamWork{T}
       end
 
       # Intersect LCM elements with lcms.vol >= lcm_thresh
-      lcms .*= (lcms .>= lcm_thresh)
+      lcm_array .*= (lcm_array .>= lcm_thresh)
 
       # 2D simplification: a voxel is a pixel in the x-z or y-z or x-y plane
       # Through-plane dimension
-      thrudim = findall(vec(all(x -> x==0, peak_mri[1].vol, dims=(1,2,3))))
+      thrudim = findall(vec(all(x -> x==0, ovecs[1].vol, dims=(1,2,3))))
       # In-plane dimensions
       strdims = setdiff(1:3, thrudim)
 
@@ -201,11 +251,56 @@ struct StreamWork{T}
                  3 6 8 9
                  4 7 9 10]
 =#
+    end
 
-      # Vectors for point updates using LCMs
-      dvox       = [zeros(Int, 3) for tid in 1:Threads.nthreads()]
-      lcm        = [zeros(T, size(lcms, 1)) for tid in 1:Threads.nthreads()]
-      isdiff     = Vector{Bool}(undef, Threads.nthreads())
+    # Vectors for point updates using LCMs
+    dvox       = [zeros(Int, 3) for tid in 1:Threads.nthreads()]
+    lcm        = [zeros(T, size(lcm_array, 1)) for tid in 1:Threads.nthreads()]
+    isdiff     = Vector{Bool}(undef, Threads.nthreads())
+
+    # Fields for microscopy regime
+    if domicro
+      # Vector field for defining a search area as a cone around an
+      # orientation vector
+      search_area = Array{Vector{T}}(undef, 2 .* Tuple(micro_search_dist) .+ 1)
+
+      for iz in axes(search_area, 3)
+        for iy in axes(search_area, 2)
+          for ix in axes(search_area, 1)
+            # Radius of search area
+            ρx = (ix - micro_search_dist[1] - 1) /
+                      (micro_search_dist[1] + T(.5))
+            ρy = (iy - micro_search_dist[2] - 1) /
+                      (micro_search_dist[2] + T(.5))
+            ρz = (iz - micro_search_dist[3] - 1) /
+                      (micro_search_dist[3] + T(.5))
+            ρ = sqrt(ρx^2 + ρy^2 + ρz^2)
+
+            # Coordinates of each point in search area
+            if ρ < 1
+              search_area[ix, iy, iz] = [ρx/ρ, ρy/ρ, ρz/ρ] 
+            else
+              search_area[ix, iy, iz] = zeros(T, 3)
+            end
+          end
+        end
+      end
+
+      # Vectors for point updates in microscopy regime
+      cosang_area    = [similar(search_area, T) for tid in 1:Threads.nthreads()]
+      cosangabs_area = [similar(search_area, T) for tid in 1:Threads.nthreads()]
+
+      # Not needed in microscopy regime
+      cosang = Vector{Vector{T}}(undef, 0)
+      cosangabs = Vector{Vector{T}}(undef, 0)
+
+      # Max search angle
+      micro_search_cosang = cosd(T(search_ang))
+    else
+      search_area = Array{Vector{T}}(undef, 0, 0, 0)
+      cosang_area = Vector{Array{T, 3}}(undef, 0)
+      cosangabs_area = Vector{Array{T, 3}}(undef, 0)
+      micro_search_cosang = T(Inf)
     end
 
     # Output vector of streamlines
@@ -220,20 +315,25 @@ struct StreamWork{T}
       cosang_thresh::T,
       T(step_size)::T,
       T(smooth_coeff)::T,
+      T(micro_search_cosang)::T,
+      micro_search_dist::Vector{Int},
       strdims::Vector{Int},
       dxyz::Matrix{Int},
       edgetype::Matrix{Int},
-      mask::BitArray{3},
-      peak::Array{Vector{T}, 4},
-      lcms::Array{T, 4},
+      mask_array::BitArray{3},
+      ovec_array::Array{T, 5},
+      search_area::Array{Vector{T}, 3},
+      lcm_array::Array{T, 4},
       sublist::Vector{Vector{T}},
       pos_now::Vector{Vector{T}},
       vec_now::Vector{Vector{T}},
       pos_next::Vector{Vector{T}},
       vec_next::Vector{Vector{T}},
-      ipeak_next::Vector{Int},
+      ivec_next::Vector{Int},
       cosang::Vector{Vector{T}},
       cosangabs::Vector{Vector{T}},
+      cosang_area::Vector{Array{T, 3}},
+      cosangabs_area::Vector{Array{T, 3}},
       dvox::Vector{Vector{Int}},
       lcm::Vector{Vector{T}},
       isdiff::Vector{Bool},
@@ -245,7 +345,7 @@ end
 
 
 """
-    Choose which ODF peak to follow to minimize the bending angle
+    Choose which orientation vector to follow to minimize the bending angle
 """
 function stream_pick_by_angle!(ix_next::Int, iy_next::Int, iz_next::Int, W::StreamWork{T}) where T<:Number
 
@@ -256,36 +356,36 @@ function stream_pick_by_angle!(ix_next::Int, iy_next::Int, iz_next::Int, W::Stre
   cosang    = W.cosang[tid]
   cosangabs = W.cosangabs[tid]
 
-  # Find ODF peak that is most similar to the current one
-  for ipeak in eachindex(cosang)
-    v = W.peak[ipeak, ix_next, iy_next, iz_next]
+  # Find orientation vector that is most similar to the current one
+  for ivec in eachindex(cosang)
+    v = view(W.ovecs, :, ivec, ix_next, iy_next, iz_next)
 
     if iszero(v)
-      cosang[ipeak] = cosangabs[ipeak] = T(-Inf)
+      cosang[ivec] = cosangabs[ivec] = T(-Inf)
     else
-      cosang[ipeak] = vec_now' * v 
-      cosangabs[ipeak] = abs(cosang[ipeak])
+      cosang[ivec] = dot(vec_now, v) 
+      cosangabs[ivec] = abs(cosang[ivec])
     end
   end
 
-  ipeak_next = argmax(cosangabs)
+  ivec_next = argmax(cosangabs)
 
-  !isfinite(cosang[ipeak_next]) && return false
+  !isfinite(cosang[ivec_next]) && return false
 
-  if cosang[ipeak_next] > 0
-    vec_next .= W.peak[ipeak_next, ix_next, iy_next, iz_next]
+  if cosang[ivec_next] > 0
+    vec_next .=   view(W.ovecs, :, ivec_next, ix_next, iy_next, iz_next)
   else
-    vec_next .= .-W.peak[ipeak_next, ix_next, iy_next, iz_next]
+    vec_next .= .-view(W.ovecs, :, ivec_next, ix_next, iy_next, iz_next)
   end
 
-  W.ipeak_next[tid] = ipeak_next
+  W.ivec_next[tid] = ivec_next
 
   return true
 end
 
 
 """
-    Choose which ODF peak to follow based on the LCM
+    Choose which orientation vector to follow based on the LCM
 """
 function stream_pick_by_lcm!(ix_next::Int, iy_next::Int, iz_next::Int, W::StreamWork{T}) where T<:Number
 
@@ -307,13 +407,15 @@ function stream_pick_by_lcm!(ix_next::Int, iy_next::Int, iz_next::Int, W::Stream
   dvox[3] = iz_now - iz_next
 
   if all(dvox .== 0)
-    # Not entering a new voxel => Continue along previouly chosen peak
-    ipeak_next = W.ipeak_next[tid]
+    # Not entering a new voxel => Continue along previouly chosen vector
+    ivec_next = W.ivec_next[tid]
 
-    if vec_now' * W.peak[ipeak_next, ix_next, iy_next, iz_next] > 0
-      vec_next .= W.peak[ipeak_next, ix_next, iy_next, iz_next]
+    v = view(W.ovecs, :, ivec_next, ix_next, iy_next, iz_next)
+
+    if dot(vec_now, v) > 0
+      vec_next .= v
     else
-      vec_next .= .-W.peak[ipeak_next, ix_next, iy_next, iz_next]
+      vec_next .= .-v
     end
 
     return true
@@ -364,32 +466,31 @@ function stream_pick_by_lcm!(ix_next::Int, iy_next::Int, iz_next::Int, W::Stream
         exitedgetype = entryedgetype
       end
 
-      # Find ODF peak best aligned to a jump in the direction of this
-      # exit edge
-      for ipeak in eachindex(cosang)
-        v = W.peak[ipeak, ix_next, iy_next, iz_next]
+      # Find orientation vector best aligned to a jump towards this exit edge
+      for ivec in eachindex(cosang)
+        v = view(W.ovecs, :, ivec, ix_next, iy_next, iz_next)
 
         if iszero(v)
-          cosang[ipeak] = cosangabs[ipeak] = T(-Inf)
+          cosang[ivec] = cosangabs[ivec] = T(-Inf)
         else
-          @views cosang[ipeak] = W.dxyz[:, exitedgetype]' * v 
-          cosangabs[ipeak] = abs(cosang[ipeak])
+          @views cosang[ivec] = dot(W.dxyz[:, exitedgetype], v)
+          cosangabs[ivec] = abs(cosang[ivec])
         end
       end
 
-      ipeak_next = argmax(cosangabs)
+      ivec_next = argmax(cosangabs)
 
-      !isfinite(cosang[ipeak_next]) && return false
+      !isfinite(cosang[ivec_next]) && return false
 
-      # Keep peak only if it's within 45 degrees of desired jump?
-      if true		#abs(cosang[ipeak_next]) > W.cosang_45
-        if cosang[ipeak_next] > 0
-          vec_next .= W.peak[ipeak_next, ix_next, iy_next, iz_next]
+      # Keep vector only if it's within 45 degrees of desired jump?
+      if true		#abs(cosang[ivec_next]) > W.cosang_45
+        if cosang[ivec_next] > 0
+          vec_next .=   view(W.ovecs, :, ivec_next, ix_next, iy_next, iz_next)
         else
-          vec_next .= .-W.peak[ipeak_next, ix_next, iy_next, iz_next]
+          vec_next .= .-view(W.ovecs, :, ivec_next, ix_next, iy_next, iz_next)
         end
 
-        W.ipeak_next[tid] = ipeak_next
+        W.ivec_next[tid] = ivec_next
 
         return true
       end
@@ -398,7 +499,7 @@ function stream_pick_by_lcm!(ix_next::Int, iy_next::Int, iz_next::Int, W::Stream
       lcm[ilcm] = 0
     end
 
-    # If no peak was found to match any of the connections in the LCM 
+    # If no vector was found to match any of the connections in the LCM 
     iszero(lcm) && return false
   end
 end
@@ -411,9 +512,9 @@ function stream_new_point!(W::StreamWork{T}) where T<:Number
 
   tid = Threads.threadid()
 
-  pos_now      = W.pos_now[tid]
-  vec_now      = W.vec_now[tid]
-  pos_next     = W.pos_next[tid]
+  pos_now  = W.pos_now[tid]
+  vec_now  = W.vec_now[tid]
+  pos_next = W.pos_next[tid]
 
   dolcm = !isempty(W.lcms)
   dodiff = dolcm
@@ -430,20 +531,98 @@ function stream_new_point!(W::StreamWork{T}) where T<:Number
 
   # Get next direction from ODF (closest to current or based on LCM)
   if !dolcm
-    # Choose which peak to follow based on similarity to current direction
+    # Choose which vector to follow based on similarity to current direction
     !stream_pick_by_angle!(ix_next, iy_next, iz_next, W) && return false
   else
-    # Choose which peak to follow conventionally for comparison
+    # Choose which vector to follow conventionally for comparison
     if dodiff
       !stream_pick_by_angle!(ix_next, iy_next, iz_next, W) && return false
-      ipeak_next_ang = W.ipeak_next[tid]
+      ivec_next_ang = W.ivec_next[tid]
     end
 
-    # Choose which peak to follow based on LCM
+    # Choose which vector to follow based on LCM
     !stream_pick_by_lcm!(ix_next, iy_next, iz_next, W) && return false
-    ipeak_next = W.ipeak_next[tid]
+    ivec_next = W.ivec_next[tid]
 
-    W.isdiff[tid] = (dodiff && (ipeak_next != ipeak_next_ang))
+    W.isdiff[tid] = (dodiff && (ivec_next != ivec_next_ang))
+  end
+
+  return true
+end
+
+
+"""
+    Generate new point for a micro streamline
+"""
+function stream_micro_new_point!(W::StreamWork{T}) where T<:Number
+
+  tid = Threads.threadid()
+
+  pos_now   = W.pos_now[tid]
+  vec_now   = W.vec_now[tid]
+  pos_next  = W.pos_next[tid]
+  vec_next  = W.vec_next[tid]
+  cosang    = W.cosang_area[tid]
+  cosangabs = W.cosangabs_area[tid]
+
+  # Set tentative next position
+  pos_next .= pos_now .+ vec_now .* W.step_size	# Assuming vec is NORM=1!
+
+  ix_next, iy_next, iz_next = round(Int, pos_next[1]), round(Int, pos_next[2]),
+                                                       round(Int, pos_next[3])
+
+  !(ix_next in axes(W.mask, 1) && iy_next in axes(W.mask, 2)
+                               && iz_next in axes(W.mask, 3)) && return false
+
+  !W.mask[ix_next, iy_next, iz_next] && return false
+
+  # Find next position by finding the orientation vector closest to current one,
+  # among all positions withing a search area around the tentative position
+  ix_search = ix_next-W.micro_search_dist[1] : ix_next+W.micro_search_dist[1]
+  iy_search = iy_next-W.micro_search_dist[2] : iy_next+W.micro_search_dist[2]
+  iz_search = iz_next-W.micro_search_dist[3] : iz_next+W.micro_search_dist[3]
+
+  search_area_off = OffsetArray(W.search_area, ix_search, iy_search, iz_search)
+  cosang_off      = OffsetArray(cosang,        ix_search, iy_search, iz_search)
+  cosangabs_off   = OffsetArray(cosangabs,     ix_search, iy_search, iz_search)
+
+  fill!(cosang, T(-Inf))
+  fill!(cosangabs, T(-Inf))
+
+  ix_range = intersect(axes(search_area_off, 1), axes(W.mask, 1))
+  iy_range = intersect(axes(search_area_off, 2), axes(W.mask, 2))
+  iz_range = intersect(axes(search_area_off, 3), axes(W.mask, 3))
+
+  for iz in iz_range
+    for iy in iy_range
+      for ix in ix_range
+        v = search_area_off[ix, iy, iz]
+
+        # Check if voxel is in mask & in search cone around current orientation
+        (!W.mask[ix, iy, iz] || iszero(v) || 
+         dot(vec_now, v) <= W.micro_search_cosang) && continue
+
+        cosang_off[ix, iy, iz]    = dot(vec_now,
+                                        view(W.ovecs, :, 1, ix, iy, iz))
+        cosangabs_off[ix, iy, iz] = abs(cosang_off[ix, iy, iz])
+      end
+    end
+  end
+
+  # Find next orienation vector (most similar to current within search area)
+  ivec_next = argmax(cosangabs_off)
+
+  !isfinite(cosang_off[ivec_next]) && return false
+
+  # Position where next orienation vector was found
+  pos_next[1] = ix_next = ivec_next[1]
+  pos_next[2] = iy_next = ivec_next[2]
+  pos_next[3] = iz_next = ivec_next[3]
+
+  if cosang_off[ivec_next] > 0
+    vec_next .=   view(W.ovecs, :, 1, ix_next, iy_next, iz_next)
+  else
+    vec_next .= .-view(W.ovecs, :, 1, ix_next, iy_next, iz_next)
   end
 
   return true
@@ -457,97 +636,100 @@ function stream_new_line(seed_vox::Vector{Int}, sub_vox::Vector{T}, W::StreamWor
 
   tid = Threads.threadid()
 
-  pos_now      = W.pos_now[tid]
-  vec_now      = W.vec_now[tid]
-  pos_next     = W.pos_next[tid]
-  vec_next     = W.vec_next[tid]
+  pos_now  = W.pos_now[tid]
+  vec_now  = W.vec_now[tid]
+  pos_next = W.pos_next[tid]
+  vec_next = W.vec_next[tid]
 
   dolcm = !isempty(W.lcms)
   dodiff = dolcm
+  domicro = !isempty(W.search_area)
 
-  strline = Vector{Vector{T}}(undef, 0)
+  npts = 0
+  strline = Vector{T}(undef, 0)
   flagline = Vector{Bool}(undef, 0)
 
   # Initialize in random position within seed voxel
-  # Get initial direction from ODF (peak with greatest amplitude)
-  # TODO: try the smaller peaks too?
-  W.ipeak_next[tid] = 1
+  # Get initial vector from seed voxel (the first vector, if many are available)
+  # TODO: sample from the other vectors too?
+  W.ivec_next[tid] = 1
 
   # Go forward and backward from starting position
   for fwd in (1, -1)
     pos_now .= seed_vox .+ sub_vox
-    vec_now .= W.peak[W.ipeak_next[tid], seed_vox...] .* fwd
+    vec_now .= view(W.ovecs, :, W.ivec_next[tid], seed_vox...) .* fwd
+
+    addpt! = (fwd == 1) ? prepend! : append!
 
     while true
-      addnew = stream_new_point!(W)
+      addnew = domicro ? stream_micro_new_point!(W) : stream_new_point!(W)
 
       !addnew && break
 
       # Save current position
-      push!(strline, copy(pos_now))
+      addpt!(strline, pos_now)
+      npts += 1
 
       if dolcm
         if dodiff
           # Save indicator of method difference at current position
-          push!(flagline, W.isdiff[tid])
+          addpt!(flagline, W.isdiff[tid])
         end
       else
         # Check angle threshold (not used with LCMs for now!!)
-        (vec_now' * vec_next) < W.cosang_thresh && break
+        dot(vec_now, vec_next) < W.cosang_thresh && break
       end
 
       # Always have a max length in case it gets stuck
-      length(strline) > W.len_max && break
+      npts > W.len_max && break
 
       # Smooth next direction
-      vec_next .= W.smooth_coeff .* vec_now .+ (1 - W.smooth_coeff) .* vec_next
-      vec_next ./= norm(vec_next)
+      if W.smooth_coeff != 0
+        vec_next .= W.smooth_coeff .* vec_now .+
+                    (1 - W.smooth_coeff) .* vec_next
+        vec_next ./= norm(vec_next)
+      end
 
       # Move to next position
       pos_now .= pos_next
       vec_now .= vec_next
     end
-
-    if fwd == 1
-      reverse!(strline, dims=:)
-      if dodiff
-        reverse!(flagline, dims=:)
-      end
-    end
   end
 
-  return strline, flagline
+  return reshape(strline, 3, :), flagline
 end
 
 
 """
-    stream(peak::Union{MRI,Vector{MRI}}; odf::Union{MRI,Nothing}=nothing}, f::Union{MRI,Vector{MRI},Nothing}=nothing, f_thresh::Real=.03, fa::Union{MRI,Nothing}=nothing, fa_thresh::Real=.1, mask::Union{MRI,Nothing}=nothing, lcms::Union{MRI,Nothing}=nothing, lcm_thresh::Real=.099, seed::Union{MRI,Nothing}=nothing, nsub::Integer=3, len_min::Integer=3, len_max::Integer=(isa(peak,MRI) ? maximum(peak.volsize) : maximum(peak[1].volsize)), ang_thresh::Real=45, step_size::Real=.5, smooth_coeff::Real=.2, verbose::Bool=false)
+    stream(ovec::Union{MRI,Vector{MRI}}; odf::Union{MRI,Nothing}=nothing}, f::Union{MRI,Vector{MRI},Nothing}=nothing, f_thresh::Real=.03, fa::Union{MRI,Nothing}=nothing, fa_thresh::Real=.1, mask::Union{MRI,Nothing}=nothing, lcms::Union{MRI,Nothing}=nothing, lcm_thresh::Real=.099, seed::Union{MRI,Nothing}=nothing, nsub::Union{Integer,Nothing}=3, len_min::Integer=3, len_max::Integer=(isa(ovec,MRI) ? maximum(ovec.volsize) : maximum(ovec[1].volsize)), ang_thresh::Union{Real,Nothing}=45, step_size::Union{Real,Nothing}=.5, smooth_coeff::Union{Real,Nothing}=.2, verbose::Bool=false, search_dist::Integer=15, search_ang::Number=10)
 
 Streamline tractography
 
 # Arguments
-- `peak::Union{MRI,Vector{MRI}}` : ODF peak vectors [npeak][nx ny nz 3]
+- `ovec::Union{MRI,Vector{MRI}}` : Orientation vectors [nvec][nx ny nz 3]
 
 # Optional arguments
-- `odf::MRI`                     : ODFs [nx ny nz 3 nvert] (default: none)
-- `f::Union{MRI,Vector{MRI}}`    : ODF peak amplitudes (or volume fractions),
-                                   for peak-wise masking [npeak][nx ny nz]
-- `f_thresh::Real`               : Minimum peak amplitude (or volume fraction),
-                                   for peak-wise masking (default: .03)
-- `fa::MRI`                      : FA (or other microstructure measure),
-                                   for voxel-wise masking (default: none)
-- `fa_thresh::Real`              : Minimum FA (or other microstructure measure),
-                                   for voxel-wise masking (default: .1)
-- `mask::MRI`                    : Brain mask [nx ny nz]
-- `lcms::Union{MRI,Nothing}`     : LCMs (default: none) [ny nx nz nmat]
-- `lcm_thresh::Real`             : Minimum LCM coefficient (default: .099)
-- `seed::Union{MRI,Nothing}`     : Seed mask (default: none, use brain mask)
+- `odf::MRI`                  : ODFs [nx ny nz 3 nvert] (default: none)
+- `f::Union{MRI,Vector{MRI}}` : Vector amplitudes (or volume fractions),
+                                for vector-wise masking [nvec][nx ny nz]
+- `f_thresh::Real`            : Minimum vector amplitude (or volume fraction),
+                                for vector-wise masking (default: .03)
+- `fa::MRI`                   : FA (or other microstructural measure),
+                                for voxel-wise masking (default: none)
+- `fa_thresh::Real`           : Minimum FA (or other microstructural measure),
+                                for voxel-wise masking (default: .1)
+- `mask::MRI`                 : Brain mask [nx ny nz]
+- `seed::Union{MRI,Nothing}`  : Seed mask [nx ny nz] (default: use brain mask)
 - `nsub::Integer`      : Number of subvoxel samples per seed voxel (default: 3)
 - `len_min::Integer`   : Minimum streamline length (default: 3)
 - `len_max::Integer`   : Maximum streamline length (default: max(nx,ny,nz))
 - `ang_thresh::Real`   : Maximum bending angle, in degrees (default: 45)
 - `step_size::Real`    : Step length, in voxels (default: .5 voxel)
 - `smooth_coeff::Real` : Vector smoothing coefficient, in [0-1] (default: .2)
+- `search_dist::Integer`      : Micro search distance, in voxels (default: 15)
+- `search_ang::Integer`       : Micro search angle, in degrees (default: 10)
+- `lcms::Union{MRI,Nothing}`  : LCMs (default: none) [ny nx nz nmat]
+- `lcm_thresh::Real`          : Minimum LCM coefficient (default: .099)
 - `verbose::Bool`      : Count differences b/w propagation methods (default: no)
 
 # Outputs
@@ -555,13 +737,14 @@ In the `Tract` structure
 - `.str`: Voxel coordinates of points along streamlines
 - `.scalar`: Indicator function of a method difference (only if `verbose==true`)
 """
-function stream(peak::Union{MRI,Vector{MRI}}; odf::Union{MRI,Nothing}=nothing, f::Union{MRI,Vector{MRI},Nothing}=nothing, f_thresh::Real=.03, fa::Union{MRI,Nothing}=nothing, fa_thresh::Real=.1, mask::Union{MRI,Nothing}=nothing, lcms::Union{MRI,Nothing}=nothing, lcm_thresh::Real=.099, seed::Union{MRI,Nothing}=nothing, nsub::Integer=3, len_min::Integer=3, len_max::Integer=(isa(peak,MRI) ? maximum(peak.volsize) : maximum(peak[1].volsize)), ang_thresh::Real=45, step_size::Real=.5, smooth_coeff::Real=.2, verbose::Bool=false)
+function stream(ovec::Union{MRI,Vector{MRI}}; odf::Union{MRI,Nothing}=nothing, f::Union{MRI,Vector{MRI},Nothing}=nothing, f_thresh::Real=.03, fa::Union{MRI,Nothing}=nothing, fa_thresh::Real=.1, mask::Union{MRI,Nothing}=nothing, seed::Union{MRI,Nothing}=nothing, nsub::Union{Integer,Nothing}=3, len_min::Integer=3, len_max::Integer=(isa(ovec,MRI) ? maximum(ovec.volsize) : maximum(ovec[1].volsize)), ang_thresh::Union{Real,Nothing}=45, step_size::Union{Real,Nothing}=.5, smooth_coeff::Union{Real,Nothing}=.2, search_dist::Integer=15, search_ang::Real=10, lcms::Union{MRI,Nothing}=nothing, lcm_thresh::Real=.099, verbose::Bool=false)
 
-  W = StreamWork(isa(peak, MRI) ? Vector{MRI}([peak]) : peak,
-                 isa(f, MRI) ? Vector{MRI}([f]) : f,
-                 fa, mask, lcms,
-                 nsub, len_min, len_max, ang_thresh, f_thresh, fa_thresh,
-                 lcm_thresh, step_size, smooth_coeff, verbose)
+  W = StreamWork(ovec; f=f, f_thresh=f_thresh, fa=fa, fa_thresh=fa_thresh,
+                 mask=mask, nsub=nsub, len_min=len_min, len_max=len_max,
+                 ang_thresh=ang_thresh, step_size=step_size,
+                 smooth_coeff=smooth_coeff,
+                 search_dist=search_dist, search_ang=search_ang,
+                 lcms=lcms, lcm_thresh=lcm_thresh, verbose=verbose)
 
   dolcm = !isempty(W.lcms)
   dodiff = dolcm
@@ -575,7 +758,7 @@ function stream(peak::Union{MRI,Vector{MRI}}; odf::Union{MRI,Nothing}=nothing, f
             * " and brain mask " * string(size(mask.vol)))
     end
 
-    @views xyz_seed = findall(seed.vol[:,:,:,1] .> 0)
+    xyz_seed = findall(seed.vol .> 0)
   end
 
   voxlist = map(x -> Int.([x[1], x[2], x[3]]), xyz_seed)
@@ -593,11 +776,11 @@ function stream(peak::Union{MRI,Vector{MRI}}; odf::Union{MRI,Nothing}=nothing, f
         # Generate new streamline
         strline, flagline = stream_new_line(voxlist[ivox], W.sublist[isub], W)
 
-        length(strline) < W.len_min && continue
+        size(strline, 2) < W.len_min && continue
 
         # Concatenate streamline (vector of vectors) into matrix,
         # push matrix into vector of matrices
-        push!(W.str[tid], reduce(hcat, strline))
+        push!(W.str[tid], strline)
 
         if dodiff
           # Also push indicator of method differences along streamline
