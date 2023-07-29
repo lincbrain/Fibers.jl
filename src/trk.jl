@@ -350,10 +350,8 @@ function str_xform(xfm::Xform{T}, tr::Tract{T}) where T<:Number
                                   Diagonal([1, 1]./trnew.voxel_size[1:2])
   trnew.image_orientation_patient = Float32.(p2s[:])
 
-  # Apply transform to streamline coordinates
-  for istr in eachindex(tr.xyz)
-    push!(trnew.xyz, mapslices(p -> xfm_apply(xfm, p), tr.xyz[istr], dims=1))
-  end
+  # Apply transform to point coordinates in each streamline
+  trnew.xyz = xfm_apply.(Ref(xfm), tr.xyz)
 
   return trnew
 end

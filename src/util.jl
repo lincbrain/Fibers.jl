@@ -15,7 +15,8 @@
 using DelimitedFiles, LinearAlgebra
 
 export cart2pol, pol2cart, cart2sph, sph2cart,
-       Xform, xfm_read, xfm_compose, xfm_apply, xfm_apply!
+       Xform, xfm_read, xfm_compose,
+       xfm_apply, xfm_apply!, xfm_rotate, xfm_rotate!
 
 
 """
@@ -107,6 +108,29 @@ function ang2rot(φ, θ)
 
   return R
 end
+
+
+"""
+    isinmask(point::Vector{T}, mask::BitArray)
+
+Check if a point is in a mask array
+"""
+isinmask(ix::T, iy::T, iz::T, mask::BitArray) where T<:Integer =
+  ix in axes(mask, 1) &&
+  iy in axes(mask, 2) &&
+  iz in axes(mask, 3) &&
+  mask[ix, iy, iz]
+
+
+isinmask(ix::T, iy::T, iz::T, mask::BitArray) where T<:Number =
+  round(Int, ix) in axes(mask, 1) &&
+  round(Int, iy) in axes(mask, 2) &&
+  round(Int, iz) in axes(mask, 3) &&
+  mask[round(Int, ix), round(Int, iy), round(Int, iz)]
+
+
+isinmask(point::Vector{T}, mask::BitArray) where T<:Number =
+  isinmask(point[1], point[2], point[3], mask)
 
 
 "Container for an image transform"
@@ -362,14 +386,15 @@ end
 
 
 """
-    xfm_apply(xfm::Xform{T}, point::Vector{T})
+    xfm_apply(xfm::Xform{Tx}, point::Array{Ti})
 
-Apply a transform specified in an `Xform` structure to a point specified in a
-vector of length 3, and return the transformed point as a vector of length 3
+Apply a transform specified in an `Xform` structure to N points specified in a
+voxel coordinate array of length 3*N, and return the transformed points as a
+voxel coordinate array of the same shape as the input array
 """
-function xfm_apply(xfm::Xform{T}, point::Vector{T}) where T<:Number
+function xfm_apply(xfm::Xform{Tx}, point::Array{Ti}) where {Tx<:Number, Ti<:Number}
 
-  newpoint = Vector{T}(undef, 3)
+  newpoint = similar(point)
 
   xfm_apply!(newpoint, xfm, point)
 
@@ -378,29 +403,64 @@ end
 
 
 """
-    xfm_apply!(outpoint::Vector{T}, xfm::Xform{T}, inpoint::Vector{T})
+    xfm_apply!(outpoint::Array{To}, xfm::Xform{Tx}, inpoint::Array{Ti})
 
-Apply a transform specified in an `Xform` structure to a point specified in a
-vector of length 3, in place
+Apply a transform specified in an `Xform` structure to N points specified in a
+voxel coordinate array of length 3*N, in place
 """
-function xfm_apply!(outpoint::Vector{T}, xfm::Xform{T}, inpoint::Vector{T}) where T<:Number
+function xfm_apply!(outpoint::Array{To}, xfm::Xform{Tx}, inpoint::Array{Ti}, typeconvert::Function=identity) where {To<:Number, Tx<:Number, Ti<:Number}
 
-  fill!(outpoint, 0)
-
-  aff = T(0)
-  for j in 1:3
-    aff += xfm.vox2vox[4, j] * inpoint[j]
-  end
-  aff += xfm.vox2vox[4, 4]
-
-  for i in 1:3
+  for k in 0:3:length(inpoint)-1	# Iterate over triplets of coordinates
+    out_aff = Tx(0)
     for j in 1:3
-      outpoint[i] += (xfm.vox2vox[i, j] * inpoint[j])
+      out_aff += xfm.vox2vox[4, j] * inpoint[k+j]
     end
+    out_aff += xfm.vox2vox[4, 4]
 
-    outpoint[i] += xfm.vox2vox[i, 4]
-    outpoint[i] /= aff
+    for i in 1:3
+      out_lin = Tx(0)
+      for j in 1:3
+        out_lin += (xfm.vox2vox[i, j] * inpoint[k+j])
+      end
+      out_lin += xfm.vox2vox[i, 4]
+
+      outpoint[k+i] = typeconvert(out_lin / out_aff)
+    end
   end
+end
+
+
+function xfm_apply!(outpoint::Array{To}, xfm::Xform{Tx}, inpoint::Array{Ti}) where {To<:Integer, Tx<:Number, Ti<:Number}
+  xfm_apply!(outpoint, xfm, inpoint, round)
+end
+
+
+"""
+    xfm_rotate(xfm::Xform{Tx}, point::Vector{Ti})
+
+Apply the rotation component of a transform specified in an `Xform` structure
+to a point specified in a voxel coordinate vector of length 3, and return the
+transformed point as a voxel coordinate vector of length 3
+"""
+function xfm_rotate(xfm::Xform{Tx}, point::Vector{Ti}) where {Tx<:Number, Ti<:Number}
+
+  newpoint = similar(point)
+
+  xfm_rotate!(newpoint, xfm, point)
+
+  return newpoint
+end
+
+
+"""
+    xfm_rotate!(outpoint::Vector{To}, xfm::Xform{Tx}, inpoint::Vector{Ti})
+
+Apply the rotation component of a transform specified in an `Xform` structure
+to a point specified in a voxel coordinate vector of length 3, in place
+"""
+function xfm_rotate!(outpoint::Vector{To}, xfm::Xform{Tx}, inpoint::Vector{Ti}) where {To<:Number, Tx<:Number, Ti<:Number}
+
+  mul!(outpoint, xfm.voxrot, inpoint)
 end
 
 
