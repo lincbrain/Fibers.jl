@@ -986,10 +986,17 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
       while nread < nval
         ln = readline(io)
-        words = split(ln)
 
-        nread += length(words)
-        push!(int_offset, parse.(Float32, words)...)
+        if startswith(ln, "@" * string(nval))		# New since PV360
+          ln = split(ln, "(")[2]
+          ln = split(ln, ")")[1]
+          vals = fill(parse(Float32, ln), nval)
+        else
+          vals = parse.(Float32, split(ln))
+        end
+
+        nread += length(vals)
+        push!(int_offset, vals...)
       end
     elseif startswith(ln, "##\$RECO_map_slope")		# Intensity slope
       ln = split(ln, "(")[2]
@@ -1000,10 +1007,17 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
       while nread < nval
         ln = readline(io)
-        words = split(ln)
 
-        nread += length(words)
-        push!(int_slope, parse.(Float32, words)...)
+        if startswith(ln, "@" * string(nval))		# New since PV360
+          ln = split(ln, "(")[2]
+          ln = split(ln, ")")[1]
+          vals = fill(parse(Float32, ln), nval)
+        else
+          vals = parse.(Float32, split(ln))
+        end
+
+        nread += length(vals)
+        push!(int_slope, vals...)
       end
     elseif startswith(ln, "##\$RECO_byte_order=")	# Byte order
       byte_order = split(ln, "=")[2]
