@@ -1042,8 +1042,10 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
     return mri
   end
 
-  # Read image units (if any)
+  # Read information about image from Bruker visu_pars file
   data_units = ""
+  visu_size = Vector{Int32}(undef, 0)
+  visu_order = Vector{Union{Nothing, Int64}}(undef, 0)
 
   if isfile(visufile)
     io = open(visufile, "r")
@@ -1051,9 +1053,17 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
     while !eof(io)
       ln = readline(io)
 
-      if startswith(ln, "##\$VisuCoreDataUnits=")	# Image units
+      if startswith(ln, "##\$VisuCoreDataUnits=")	# Image units (if any)
         ln = readline(io)
         data_units = replace(ln, "<"=>"", ">"=>"")
+      elseif startswith(ln, "##\$VisuCoreSize=")	# Image size
+        ln = readline(io)
+        words = split(ln)
+        visu_size = parse.(Int32, words)
+      elseif startswith(ln, "##\$VisuAcqGradEncoding")	# Encode dimensions
+        ln = readline(io)
+        words = split(ln)
+        visu_order = indexin(["read_enc", "phase_enc", "slice_enc"], words)
       end
     end
 
@@ -1063,7 +1073,15 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
   # Read image data
   io = open(imgfile, "r")
 
-  vol = read!(io, Array{data_type}(undef, (mri.volsize..., mri.nframes)))
+  if isempty(visu_order) || visu_order == [1;2;3]	# Volume not permuted
+    vol = read!(io, Array{data_type}(undef, (mri.volsize..., mri.nframes)))
+  else							# Volume permuted
+    if isempty(visu_size)
+      visu_size = mri.volsize[[1, 2, 3][vol_order]]
+    end
+    vol = read!(io, Array{data_type}(undef, (visu_size..., mri.nframes)))
+    vol = permutedims(vol, (visu_order..., 4))
+  end
 
   close(io)
 
