@@ -1,4 +1,4 @@
-name = "FreeSurfer"
+name = "Fibers"
 uuid = "cbb28e16-2113-4377-92c1-bba511c54513"
 authors = ["Anastasia Yendiki <ayendiki@mgh.harvard.edu>"]
 version = "0.1.0"
