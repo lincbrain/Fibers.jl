@@ -1,11 +1,11 @@
-<img src="docs/fsjl-logo-dark.png" width=400>
+<img src="docs/fibers-logo-dark.png" width=400>
 
 ### Load this package
 
 If you want julia (and this package) to use multi-threading for faster computation, you have to explicitly tell it to. You can do that either by starting julia  with ```julia --thread auto```, or by setting the environment variable ```JULIA_NUM_THREADS``` to ```auto``` before starting julia. (This will use the total number of CPU threads available on your computer. Alternatively, you can specify a number of threads in place of ```auto```.)
 
 ```julia
-julia> using FreeSurfer
+julia> using Fibers
 ```
 
 ### Read .mgh, .mgz, .nii, .nii.gz volumes
