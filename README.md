@@ -1,3 +1,5 @@
+[![Build Status](https://github.com/lincbrain/Fibers.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/lincbrain/Fibers.jl/actions/workflows/CI.yml?query=branch%3Amain)
+
 <img src="docs/fibers-logo-dark.png" width=400>
 
 ### Load this package
