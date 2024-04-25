@@ -57,7 +57,7 @@ end
 
 
 "The FreeSurfer color look-up table"
-const global color_lut = LUT(pkgdir(FreeSurfer) * "/src/FreeSurferColorLUT.txt")
+const global color_lut = LUT(pkgdir(Fibers) * "/src/FreeSurferColorLUT.txt")
 
 
 """
