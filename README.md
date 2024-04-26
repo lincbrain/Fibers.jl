@@ -1,4 +1,4 @@
-[![Build Status](https://github.com/lincbrain/Fibers.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/lincbrain/Fibers.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![Build Status](https://github.com/lincbrain/Fibers.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/lincbrain/Fibers.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 
 <img src="docs/fibers-logo-dark.png" width=400>
 
