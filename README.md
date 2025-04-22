@@ -66,3 +66,7 @@ julia> trk_write(tr, "/tmp/acomm.trk")
 
 [A gentle introduction to diffusion MRI](https://github.com/freesurfer/FreeSurfer.jl/blob/master/docs/tutorial.ipynb)
 
+### Acknowledgements
+
+Development of this package is supported by the NIH National Institute of Neurologic Disorders and Stroke (grants UM1-NS132358, R01-NS119911, R01-NS127353).
+
