@@ -1024,16 +1024,13 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
 
   mri.nframes = is2d ? length(int_slope) ÷ nslice : length(int_slope)
 
-  mri.vox2ras0 = Matrix(Diagonal([mri.volres; 1]))
-
-  if headeronly
-    return mri
-  end
-
   # Read information about image from Bruker visu_pars file
   data_units = ""
   visu_size = Vector{Int32}(undef, 0)
   visu_order = Vector{Union{Nothing, Int64}}(undef, 0)
+  visu_fov = Vector{Float32}(undef, 0)
+  visu_orient = Vector{Float32}(undef, 0)
+  visu_pos = Vector{Float32}(undef, 0)
 
   if isfile(visufile)
     io = open(visufile, "r")
@@ -1048,14 +1045,95 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
         ln = readline(io)
         words = split(ln)
         visu_size = parse.(Int32, words)
+      elseif startswith(ln, "##\$VisuCoreExtent=")	# FOV size
+        ln = readline(io)
+        words = split(ln)
+        visu_fov = parse.(Float32, words)
+      elseif startswith(ln, "##\$VisuCoreOrientation=")	# Volume orientation
+        ln = split(ln, "(")[2]
+        ln = split(ln, ")")[1]
+        words = split(ln, ",")
+        nval = prod(parse.(Int64, words))
+
+        nread = 0
+
+        while nread < nval
+          ln = readline(io)
+          words = split(ln)
+
+          nread += length(words)
+          push!(visu_orient, parse.(Float32, words)...)
+        end
+
+        if is2d
+          # For 2D scans, there is one orientation per slice - use middle slice
+          visu_orient = visu_orient[(length(visu_orient) ÷ 9 ÷ 2) * 9 .+ (1:9)]
+        end
+      elseif startswith(ln, "##\$VisuCorePosition=")	# Volume position
+        ln = split(ln, "(")[2]
+        ln = split(ln, ")")[1]
+        words = split(ln, ",")
+        nval = prod(parse.(Int64, words))
+
+        nread = 0
+
+        while nread < nval
+          ln = readline(io)
+          words = split(ln)
+
+          nread += length(words)
+          push!(visu_pos, parse.(Float32, words)...)
+        end
+
+        if is2d
+          # For 2D scans, there is one position per slice - use middle slice
+          visu_pos = visu_pos[(length(visu_pos) ÷ 3 ÷ 2) * 3 .+ (1:3)]
+        end
       elseif startswith(ln, "##\$VisuAcqGradEncoding")	# Encode dimensions
         ln = readline(io)
         words = split(ln)
-        visu_order = indexin(["read_enc", "phase_enc", "slice_enc"], words)
+        if is2d
+          visu_order = [indexin(["read_enc", "phase_enc"], words); 3]
+        else
+          visu_order = indexin(["read_enc", "phase_enc", "slice_enc"], words)
+        end
       end
     end
 
     close(io)
+  end
+ 
+  # Update resolution and matrix size
+  if !isempty(visu_fov) && !isempty(visu_size)
+    # For 2D scans, append resolution and matrix size in the slice dimension
+    if is2d
+      push!(visu_fov, mri.volsize[3] * mri.volres[3])
+      push!(visu_size, mri.volsize[3])
+    end
+
+    dv = visu_fov ./ visu_size
+
+    mri.volres  .= dv
+    mri.volsize .= visu_size
+  end
+
+  # Set vox2ras matrix
+  if isempty(visu_orient)
+    visu_orient = Float32.([1, 0, 0, 0, 1, 0, 0, 0, 1])
+  end
+
+  if isempty(visu_pos)
+    visu_pos = Float32.([0, 0, 0])
+  end
+
+  mri.vox2ras0 = [visu_orient[1] visu_orient[4] visu_orient[7] visu_pos[1];
+                  visu_orient[2] visu_orient[5] visu_orient[8] visu_pos[2]; 
+                  visu_orient[3] visu_orient[6] visu_orient[9] visu_pos[3];
+                  0              0              0              1          ] *
+                  Diagonal([mri.volres; 1])
+
+  if headeronly
+    return mri
   end
 
   # Read image data
@@ -1068,7 +1146,6 @@ function load_bruker(indir::String; headeronly::Bool=false, reco::Integer=1)
       visu_size = mri.volsize[[1, 2, 3][vol_order]]
     end
     vol = read!(io, Array{data_type}(undef, (visu_size..., mri.nframes)))
-    vol = permutedims(vol, (visu_order..., 4))
   end
 
   close(io)
